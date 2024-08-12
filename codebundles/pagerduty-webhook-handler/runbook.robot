@@ -2,6 +2,7 @@
 Metadata          Author    stewartshea
 Documentation     This CodeBundle will inspect pagerduty webhook payload data (stored in the RunWhen Platform), parse the data for SLX hints, and add Tasks to the RunSession
 Metadata          Supports     PagerDuty
+Metadata          Display Name     PagerDuty Webhook Handler
 Suite Setup       Suite Initialization
 Library           BuiltIn
 Library           RW.Core
