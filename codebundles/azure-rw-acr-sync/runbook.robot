@@ -2,6 +2,7 @@
 Metadata          Author    stewartshea
 Documentation     This CodeBundle will sync all of the images needed to operate RunWhen (Local + Runner components), to Azure ACR using the az cli. 
 Metadata          Supports     Azure,ACR
+Metadata          Display Name     Azure RunWhen ACR Image Sync
 Suite Setup       Suite Initialization
 Library           BuiltIn
 Library           RW.Core
