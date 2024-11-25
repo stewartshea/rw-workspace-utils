@@ -1,0 +1,33 @@
+apiVersion: runwhen.com/v1
+kind: GenerationRules
+spec:
+  generationRules:
+  - resourceTypes:
+    - deployment
+    matchRules:
+      - type: and
+        matches:
+        - resourceType: variables
+          type: pattern
+          pattern: "azure_acr"
+          properties: [custom/private_registry]
+          mode: substring
+        - resourceType: variables
+          type: pattern
+          pattern: "."
+          properties: [custom/azure_acr_registry]
+          mode: substring
+        - type: pattern
+          pattern: "runner"
+          properties: [name]
+          mode: substring
+    slxs:
+    - baseName: rw-acr-sync
+      levelOfDetail: detailed
+      qualifiers: ["resource"]
+      baseTemplateName: azure-rw-acr-sync
+      outputItems:
+        - type: slx
+        - type: sli
+        - type: runbook
+          templateName: azure-rw-acr-sync-taskset.yaml

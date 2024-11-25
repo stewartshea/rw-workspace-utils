@@ -1,5 +1,5 @@
 *** Settings ***
-Documentation     Synchronizes CodeCollection and Helm Images for the RunWhen Runner into a private ACR Registry 
+Documentation       Determines if any RunWhen CodeCollection or private runner components require image updates. 
 Metadata            Author    stewartshea
 Metadata            Display Name    RunWhen Platform Azure ACR Image Sync
 Metadata            Supports    Azure    ACR    Update    RunWhen    CodeCollection
@@ -13,8 +13,8 @@ Library             OperatingSystem
 
 Suite Setup         Suite Initialization
 *** Tasks ***
-Sync CodeCollection Images to ACR Registry `${REGISTRY_NAME}`
-    [Documentation]    Sync CodeCollection image upates that need to be synced internally to the private registry. 
+Check for CodeCollection Updates against ACR Registry`${REGISTRY_NAME}`
+    [Documentation]    Count the number of CodeCollection image upates that need to be synced internally to the private registry. 
     [Tags]    acr    update    codecollection    utility
     ${codecollection_images}=    RW.CLI.Run Bash File
     ...    bash_file=rwl_codecollection_updates.sh
@@ -25,10 +25,15 @@ Sync CodeCollection Images to ACR Registry `${REGISTRY_NAME}`
     ...    include_in_history=false
     ...    show_in_rwl_cheatsheet=false
 
-    RW.Core.Add Pre To Report    CodeCollection Image Update Output:\n${codecollection_images.stdout}
+    ${image_update_count}=    RW.CLI.Run Cli
+    ...    cmd=[ -f "${OUTPUT_DIR}/azure-rw-acr-sync/cc_images_to_update.json" ] && cat "${OUTPUT_DIR}/azure-rw-acr-sync/cc_images_to_update.json" | jq 'if . == null or . == [] then 0 else length end' | tr -d '\n' || echo -n 0
+    ...    env=${env}
+    ...    include_in_history=false
 
-Sync RunWhen Local Image Updates to ACR Registry`${REGISTRY_NAME}`
-    [Documentation]    Sync RunWhen Local image upates that need to be synced internally to the private registry. 
+    Set Global Variable    ${outdated_codecollection_images}    ${image_update_count.stdout}
+
+Check for RunWhen Local Image Updates against ACR Registry`${REGISTRY_NAME}`
+    [Documentation]    Count the number of RunWhen Local image upates that need to be synced internally to the private registry. 
     [Tags]    acr    update    codecollection    utility
     ${runwhen_local_images}=    RW.CLI.Run Bash File
     ...    bash_file=rwl_helm_image_updates.sh
@@ -40,8 +45,17 @@ Sync RunWhen Local Image Updates to ACR Registry`${REGISTRY_NAME}`
     ...    include_in_history=false
     ...    show_in_rwl_cheatsheet=false
 
-    RW.Core.Add Pre To Report    RunWhen Local Image Update Output:\n${runwhen_local_images.stdout}
+    ${image_update_count}=    RW.CLI.Run Cli
+    ...    cmd=cat ${OUTPUT DIR}/azure-rw-acr-sync/images_to_update.json | jq 'to_entries | map(select(.value.update_required == true)) | from_entries | length '| tr -d '\n'
+    ...    env=${env}
+    ...    include_in_history=false
 
+    Set Global Variable    ${outdated_runwhen_local_images}    ${image_update_count.stdout}
+
+
+Count Images Needing Update and Push Metric
+    ${total_images}=      Evaluate  (${outdated_codecollection_images}+${outdated_runwhen_local_images})
+    RW.Core.Push Metric    ${total_images}
 
 *** Keywords ***
 Suite Initialization
@@ -51,6 +65,14 @@ Suite Initialization
     ...    pattern=\w*
     ...    example=true
     ...    default=false
+    ${SYNC_IMAGES}=    RW.Core.Import User Variable   SYNC_IMAGES
+    ...    type=string
+    ...    description=Set to true in order to update the images in the private registry.   
+    ...    pattern=\w*
+    ...    example=true
+    ...    default=false
+    Set Suite Variable     ${SYNC_IMAGES}    ${SYNC_IMAGES}
+
     ${REGISTRY_NAME}=    RW.Core.Import User Variable    REGISTRY_NAME
     ...    type=string
     ...    description=The name of the Azure Container Registry to import images into. 
@@ -63,12 +85,6 @@ Suite Initialization
     ...    pattern=\w*
     ...    example=runwhen
     ...    default=runwhen
-    ${SYNC_IMAGES}=    RW.Core.Import User Variable    SYNC_IMAGES
-    ...    type=string
-    ...    description=Set to true to sync images. If false, only a report is generated. 
-    ...    pattern=\w*
-    ...    example=true
-    ...    default=true
     Set Suite Variable    ${DOCKER_USERNAME}    ""
     Set Suite Variable    ${DOCKER_TOKEN}    ""
     ${USE_DOCKER_AUTH}=    RW.Core.Import User Variable
@@ -89,10 +105,10 @@ Suite Initialization
     Set Suite Variable     ${REGISTRY_REPOSITORY_PATH}    ${REGISTRY_REPOSITORY_PATH}
     Set Suite Variable     ${REGISTRY_NAME}    ${REGISTRY_NAME}
     Set Suite Variable     ${USE_DATE_TAG}    ${USE_DATE_TAG}
+
     Set Suite Variable
     ...    ${env}
     ...    {"REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-sync", "TMPDIR":"/var/tmp/runwhen", "SYNC_IMAGES":"${SYNC_IMAGES}", "USE_DATE_TAG":"${USE_DATE_TAG}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}"}
-
 
 Import Docker Secrets
     ${DOCKER_USERNAME}=    RW.Core.Import Secret

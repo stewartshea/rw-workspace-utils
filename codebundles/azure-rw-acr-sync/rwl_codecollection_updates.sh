@@ -1,20 +1,30 @@
 #!/bin/bash
 
+WORKDIR=${WORKDIR:-"./helm_work"}  # Output directory for all temporary files
+OUTPUT_JSON="$WORKDIR/cc_images_to_update.json"
+RENDERED_YAML="$WORKDIR/rendered_chart.yaml"
+REGISTRIES_TXT="$WORKDIR/registries.txt"
+
+# Registry-specific variables
+REGISTRY_TYPE=${REGISTRY_TYPE:-"acr"} # Default to ACR, can be "acr", "artifactory", "gcr", etc.
+REGISTRY_NAME=${REGISTRY_NAME:-""} # Generic registry name
+REGISTRY_URL="" # Registry URL/endpoint
+REGISTRY_REPOSITORY_PATH=${REGISTRY_REPOSITORY_PATH:-""} # Root path in registry
+SYNC_IMAGES=${SYNC_IMAGES:-false} # Whether to sync images
+
+# Clean Output File
+rm -f $OUTPUT_JSON
+
 # Set Private Registry
-private_registry="${ACR_REGISTRY}"
+private_registry="${REGISTRY_NAME}"
 
 # Set Architecture
-desired_architecture="${IMAGE_ARCHITECTURE}"
+desired_architecture="${IMAGE_ARCHITECTURE:-"amd64"}"
 
-# Specify values file
-values_file="../sample_values.yaml"
-new_values_file="../updated_values.yaml"
 
 # Tag exclusion list
 tag_exclusion_list=("tester")
 
-# Generate a unique date-based tag
-date_based_tag=$(date +%Y%m%d%H%M%S)
 
 # Docker Hub credentials
 docker_username="${DOCKER_USERNAME}"
@@ -25,53 +35,20 @@ if [[ -z "$docker_username" || -z "$docker_token" ]]; then
     echo "Warning: Docker credentials (DOCKER_USERNAME and DOCKER_TOKEN) should be set to avoid throttling."
 fi
 
-runwhen_local_images=$(cat <<EOF
-{
-    "ghcr.io/runwhen-contrib/runwhen-local": {
-        "destination": "runwhen/runwhen-local",
-        "yaml_path": "runwhenLocal.image",
-        "tag": "latest",
-        "use_repository_only": false
-    },
-    "us-docker.pkg.dev/runwhen-nonprod-shared/public-images/runner": {
-        "destination": "runwhen/runner",
-        "yaml_path": "runner.image",
-        "tag":"latest",
-        "use_repository_only": false
-    },
-    "docker.io/otel/opentelemetry-collector": {
-        "destination": "otel/opentelemetry-collector",
-        "yaml_path": "opentelemetry-collector.image",
-        "tag": "0.109.0",
-        "use_repository_only": true
-    },
-    "docker.io/prom/pushgateway": {
-        "destination": "prom/pushgateway",
-        "yaml_path": "runner.pushgateway.image",
-        "tag": "v1.9.0",
-        "use_repository_only": false
-    }
-}
-EOF
-)
-
+az acr login -n "$private_registry"
 codecollection_images=$(cat <<EOF
 {
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-cli-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-cli-codecollection-main",
-        "yaml_path": "runner.runEnvironment.image"
+        "destination": "runwhen/runwhen-contrib-rw-cli-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-public-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-public-codecollection-main",
-        "yaml_path": "runner.runEnvironment.image"
+        "destination": "runwhen/runwhen-contrib-rw-public-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-generic-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-generic-codecollection-main",
-        "yaml_path": "runner.runEnvironment.image"
+        "destination": "runwhen/runwhen-contrib-rw-generic-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-workspace-utils-main": {
-        "destination": "runwhen/runwhen-contrib-rw-workspace-utils-main",
-        "yaml_path": "runner.runEnvironment.image"
+        "destination": "runwhen/runwhen-contrib-rw-workspace-utils-main"
     }
 }
 EOF
@@ -125,19 +102,18 @@ get_sorted_tags_by_date() {
 
         if [[ $repository_image == *.pkg.dev/* ]]; then
             MANIFEST=$(curl -s "https://us-west1-docker.pkg.dev/v2/${repository_image#*pkg.dev/}/manifests/$TAG")
-
             # Check if the manifest is multi-arch
             media_type=$(echo "$MANIFEST" | jq -r '.mediaType')
             if [ "$media_type" == "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
                 # Multi-arch manifest
                 MANIFESTS=$(echo "$MANIFEST" | jq -c --arg arch "$desired_architecture" '.manifests[] | select(.platform.architecture == $arch)')
+
                 for MANIFEST_ITEM in $MANIFESTS; do
                     ARCH_MANIFEST_DIGEST=$(echo "$MANIFEST_ITEM" | jq -r '.digest')
                     ARCH_MANIFEST=$(curl -s "https://us-west1-docker.pkg.dev/v2/${repository_image#*pkg.dev/}/manifests/$ARCH_MANIFEST_DIGEST")
                     CONFIG_DIGEST=$(echo "$ARCH_MANIFEST" | jq -r '.config.digest')
                     CONFIG=$(curl -L -s "https://us-west1-docker.pkg.dev/v2/${repository_image#*pkg.dev/}/blobs/$CONFIG_DIGEST")
                     CREATION_DATE=$(echo "$CONFIG" | jq -r '.created')
-
                     if [ -n "$CREATION_DATE" ]; then
                         tag_dates+=("$CREATION_DATE $TAG")
                         break
@@ -171,15 +147,50 @@ get_sorted_tags_by_date() {
     echo $sorted_tags
 }
 
+# Function to check if a tag exists in the destination registry
+# Function to check if a tag exists in the destination registry
+tag_exists_in_acr() {
+    local destination_image=$1
+    local destination_tag=$2
+    echo "Checking if tag $destination_tag exists in $private_registry/$destination_image..."
 
-# Function to copy image using az acr import with Docker Hub authentication only if the source is Docker Hub
+    # First, check if the repository exists
+    az acr repository show -n "$private_registry" --repository "$destination_image" > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo "Repository $destination_image does not exist in $private_registry. Flagging as needing update."
+        return 1  # Needs update
+    fi
+
+    # Then check if the tag exists
+    az acr manifest list-metadata "$private_registry/$destination_image" \
+        --query "[?tags[?@=='$destination_tag']]" | jq -e '. | length > 0' > /dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        echo "Tag $destination_tag exists in $private_registry/$destination_image."
+        return 0  # Tag exists
+    else
+        echo "Tag $destination_tag does not exist in $private_registry/$destination_image."
+        return 1  # Needs update
+    fi
+}
+
+
+
+# Modify the copy_image function
 copy_image() {
     repository_image=$1
     src_tag=$2
     destination=$3
     dest_tag=$4
 
-    echo "Importing image $repository_image:$src_tag to $private_registry/$destination:$dest_tag..."
+    # Check if the destination tag already exists
+    echo "Checking $destination for tag $dest_tag" >&2
+    if tag_exists_in_acr "$destination" "$dest_tag"; then
+        echo "Destination tag $dest_tag already exists in $private_registry/$destination. Skipping import."  >&2
+        return
+    fi
+
+    echo "Importing image $repository_image:$src_tag to $private_registry/$destination:$dest_tag..." >&2
 
     # Initialize the command with the basic az acr import structure
     cmd="az acr import -n ${private_registry} --source ${repository_image}:${src_tag} --image ${destination}:${dest_tag} --force"
@@ -208,34 +219,8 @@ copy_image() {
     echo "Image ${private_registry}/${destination}:${dest_tag} imported successfully"
 }
 
-# Function to update image registry and repository in values file
-update_values_yaml_no_tag() {
-    local registry=$1
-    local repository=$2
-    local yaml_path=$3
 
-    yq eval ".${yaml_path}.registry = \"$registry\"" -i $new_values_file
-    yq eval ".${yaml_path}.repository = \"$repository\"" -i $new_values_file
-}
 
-# Function to update image registry, repository, and tag in values file (registry and repository)
-update_values_yaml() {
-    local registry=$1
-    local repository=$2
-    local tag=$3
-    local yaml_path=$4
-    local use_repository_only=$5
-
-    if [ "$use_repository_only" = true ]; then
-        # Only use repository concatenated path
-        yq eval ".${yaml_path}.repository = \"$registry/$repository\"" -i $new_values_file
-    else
-        # Use registry and repository separately
-        yq eval ".${yaml_path}.registry = \"$registry\"" -i $new_values_file
-        yq eval ".${yaml_path}.repository = \"$repository\"" -i $new_values_file
-    fi
-    yq eval ".${yaml_path}.tag = \"$tag\"" -i $new_values_file
-}
 
 # Check if a tag is in the exclusion list
 is_excluded_tag() {
@@ -255,18 +240,11 @@ has_tag() {
     jq -e --arg repository_image "$repository_image" '.[($repository_image)].tag != null' <<< "$images_json" > /dev/null 2>&1
 }
 
-# Main script
+#Main
 main() {
-
-    # Create a backup of the original values file
-    cp $values_file $new_values_file
-
-    # Process CodeCollection images
     for repository_image in $(echo $codecollection_images | jq -r 'keys[]'); do
-        # Extract the custom destination and yaml path
         custom_repo_destination=$(echo $codecollection_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].destination')
         custom_destination_repo=$(echo $custom_repo_destination | awk -F '/' '{print $1}')
-        yaml_path=$(echo $codecollection_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].yaml_path')
 
         if has_tag "$repository_image" "$codecollection_images"; then
             tag=$(echo $codecollection_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].tag')
@@ -286,55 +264,36 @@ main() {
                 break
             done
         fi
-        echo "Copying image: $repository_image:$selected_tag to $private_registry/$custom_repo_destination:$selected_tag"
-        copy_image $repository_image $selected_tag $custom_repo_destination $selected_tag
-        echo "Image $private_registry/$custom_repo_destination:$selected_tag pushed successfully"
-        update_values_yaml $private_registry $custom_destination_repo $selected_tag $yaml_path
-    done
 
-    # Process RunWhen component images
-    for repository_image in $(echo $runwhen_local_images | jq -r 'keys[]'); do
-        # Extract the custom destination, yaml path, and use_repository_only flag
-        custom_repo_destination=$(echo $runwhen_local_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].destination')
-        yaml_path=$(echo $runwhen_local_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].yaml_path')
-        use_repository_only=$(echo $runwhen_local_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].use_repository_only')
+        # Check if the repository or tag exists
+        if ! tag_exists_in_acr "$custom_repo_destination" "$selected_tag"; then
+            echo "Flagging $custom_repo_destination:$selected_tag as needing an update."
 
-        if has_tag "$repository_image" "$runwhen_local_images"; then
-            tag=$(echo $runwhen_local_images | jq -r --arg repository_image "$repository_image" '.[$repository_image].tag')
-            echo "Skipping fetching tags for $repository_image and using specified tag $tag"
-            selected_tag=$tag
+            # Always append to JSON-formatted output
+            echo "{\"source\": \"$repository_image:$selected_tag\", \"destination\": \"$private_registry/$custom_repo_destination:$selected_tag\"}," >> $OUTPUT_JSON
+
+            if [[ "$SYNC_IMAGES" == "true" ]]; then
+                copy_image $repository_image $selected_tag $custom_repo_destination $selected_tag
+                echo "Image $private_registry/$custom_repo_destination:$selected_tag pushed successfully"
+            fi
         else
-            echo "----"
-            echo "Processing RunWhen component image: $repository_image"
-            sorted_tags=$(get_sorted_tags_by_date $repository_image)
-            selected_tag=""
-            for tag in $sorted_tags; do
-                if is_excluded_tag $tag; then
-                    echo "Skipping excluded tag: $tag"
-                    continue
-                fi
-                selected_tag=$tag
-                break
-            done
+            echo "Skipping: $custom_repo_destination:$selected_tag already exists."
         fi
-        if [ "$selected_tag" == "latest" ]; then
-            selected_tag=$date_based_tag
-            echo "Copying image: $repository_image:latest to $private_registry/$custom_repo_destination:$selected_tag"
-            copy_image $repository_image latest $custom_repo_destination $selected_tag
-        else
-            echo "Copying image: $repository_image:$selected_tag to $private_registry/$custom_repo_destination:$selected_tag"
-            copy_image $repository_image $selected_tag $custom_repo_destination $selected_tag
-        fi
-        update_values_yaml $private_registry $custom_repo_destination $selected_tag $yaml_path $use_repository_only
     done
-
-    # Display updated new_values.yaml content if it exists
-    if [ -f "$new_values_file" ]; then
-        echo "Updated $new_values_file:"
-        cat $new_values_file
-    else
-        echo "No $new_values_file file found."
-    fi
 }
+
+
+
 # Execute the main script
 main
+
+# Finalize JSON output (if SYNC_IMAGES is false, finalize only once at the end)
+if [[ "$SYNC_IMAGES" != "true" && -f $OUTPUT_JSON ]]; then
+    sed -i '$ s/,$//' $OUTPUT_JSON  # Remove trailing comma from the last entry
+    {
+        echo "["
+        cat $OUTPUT_JSON
+        echo "]"
+    } > "${OUTPUT_JSON}.tmp" && mv "${OUTPUT_JSON}.tmp" $OUTPUT_JSON
+    echo "Image update list written to $OUTPUT_JSON"
+fi
