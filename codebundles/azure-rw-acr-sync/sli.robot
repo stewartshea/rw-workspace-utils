@@ -81,7 +81,7 @@ Suite Initialization
     ...    default=myacr.azurecr.io
     ${REGISTRY_REPOSITORY_PATH}=    RW.Core.Import User Variable    REGISTRY_REPOSITORY_PATH
     ...    type=string
-    ...    description=The name root path of the repository for image storage.   
+    ...    description=The path of the repository for image storage.   
     ...    pattern=\w*
     ...    example=runwhen
     ...    default=runwhen

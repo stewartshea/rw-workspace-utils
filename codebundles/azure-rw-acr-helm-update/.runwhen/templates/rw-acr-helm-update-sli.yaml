@@ -23,21 +23,24 @@ spec:
     {% else %}
     ref: main
     {% endif %}
-    pathToRobot: codebundles/azure-rw-acr-sync/sli.robot
+    pathToRobot: codebundles/azure-rw-acr-helm-update/sli.robot
   intervalStrategy: intermezzo
   intervalSeconds: 600
   configProvided:
     - name: REGISTRY_NAME
       value: "{{custom.azure_acr_registry}}"
-    - name: REGISTRY_REPOSITORY_PATH
+    - name: REPOSITORY_ROOT_PATH
       value: "runwhen"
-    - name: USE_DOCKER_AUTH
-      value: "false"
-    - name: SYNC_IMAGES
+    - name: HELM_APPLY_UPGRADE
       value: "true"
-    - name: USE_DATE_TAG
-      value: "true"
+    - name: HELM_RELEASE
+      value: {{match_resource.resource.metadata.annotations.get('meta.helm.sh/release-name', None)}}
+    - name: NAMESPACE
+      value: {{match_resource.resource.metadata.namespace}}
+    - name: CONTEXT
+      value: {{context}}
   secretsProvided:
+    {% include "kubernetes-auth.yaml" ignore missing %}
     {% include "azure-auth.yaml" ignore missing %}
   alerts:
     warning:

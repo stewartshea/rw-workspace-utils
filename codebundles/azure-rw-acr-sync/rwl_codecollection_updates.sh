@@ -8,7 +8,6 @@ REGISTRIES_TXT="$WORKDIR/registries.txt"
 # Registry-specific variables
 REGISTRY_TYPE=${REGISTRY_TYPE:-"acr"} # Default to ACR, can be "acr", "artifactory", "gcr", etc.
 REGISTRY_NAME=${REGISTRY_NAME:-""} # Generic registry name
-REGISTRY_URL="" # Registry URL/endpoint
 REGISTRY_REPOSITORY_PATH=${REGISTRY_REPOSITORY_PATH:-""} # Root path in registry
 SYNC_IMAGES=${SYNC_IMAGES:-false} # Whether to sync images
 
@@ -39,16 +38,16 @@ az acr login -n "$private_registry"
 codecollection_images=$(cat <<EOF
 {
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-cli-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-cli-codecollection-main"
+        "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-rw-cli-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-public-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-public-codecollection-main"
+        "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-rw-public-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-generic-codecollection-main": {
-        "destination": "runwhen/runwhen-contrib-rw-generic-codecollection-main"
+        "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-rw-generic-codecollection-main"
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-workspace-utils-main": {
-        "destination": "runwhen/runwhen-contrib-rw-workspace-utils-main"
+        "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-rw-workspace-utils-main"
     }
 }
 EOF

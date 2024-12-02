@@ -1,0 +1,9 @@
+images:
+  - image: "$REGISTRY_REPOSITORY_PATH/runwhen-local"
+    set_path: "runwhenLocal.image.tag"
+  - image: "$REGISTRY_REPOSITORY_PATH/opentelemetry-collector"
+    set_path: "opentelemetry-collector.image.tag"
+  - image: "$REGISTRY_REPOSITORY_PATH/pushgateway"
+    set_path: "runner.pushgateway.image.tag"
+  - image: "$REGISTRY_REPOSITORY_PATH/runner"
+    set_path: "runner.image.tag"
