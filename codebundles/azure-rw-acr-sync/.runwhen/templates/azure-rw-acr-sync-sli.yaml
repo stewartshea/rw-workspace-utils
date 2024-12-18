@@ -37,6 +37,8 @@ spec:
       value: "true"
     - name: USE_DATE_TAG
       value: "true"
+    - name: AZURE_RESOURCE_SUBSCRIPTION_ID
+      value: "{{ custom.azure_acr_registry_subscriptionId }}"
   secretsProvided:
     {% include "azure-auth.yaml" ignore missing %}
   alerts:

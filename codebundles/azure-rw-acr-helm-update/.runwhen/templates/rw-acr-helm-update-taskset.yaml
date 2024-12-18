@@ -33,6 +33,8 @@ spec:
       value: {{match_resource.resource.metadata.namespace}}
     - name: CONTEXT
       value: {{context}}
+    - name: AZURE_RESOURCE_SUBSCRIPTION_ID
+      value: "{{ custom.azure_acr_registry_subscriptionId }}"
   secretsProvided:
     {% include "kubernetes-auth.yaml" ignore missing %}
     {% include "azure-auth.yaml" ignore missing %}

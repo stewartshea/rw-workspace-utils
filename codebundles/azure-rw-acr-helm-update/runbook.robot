@@ -88,6 +88,12 @@ Suite Initialization
     ...    pattern=\w*
     ...    example=runwhen-local
     ...    default=runwhen-local
+    ${AZURE_RESOURCE_SUBSCRIPTION_ID}=    RW.Core.Import User Variable    AZURE_RESOURCE_SUBSCRIPTION_ID
+    ...    type=string
+    ...    description=The Azure Subscription ID for the resource.  
+    ...    pattern=\w*
+    Set Suite Variable    ${AZURE_RESOURCE_SUBSCRIPTION_ID}    ${AZURE_RESOURCE_SUBSCRIPTION_ID}
+
     Set Suite Variable
     ...    ${env}
-    ...    {"CURDIR":"${CURDIR}","KUBECONFIG":"./${kubeconfig.key}", "HELM_RELEASE":"${HELM_RELEASE}","REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-helm-update", "NAMESPACE":"${NAMESPACE}","CONTEXT":"${CONTEXT}", "HELM_APPLY_UPGRADE":"${HELM_APPLY_UPGRADE}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}"}
+    ...    {"CURDIR":"${CURDIR}","KUBECONFIG":"./${kubeconfig.key}", "HELM_RELEASE":"${HELM_RELEASE}","REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-helm-update", "NAMESPACE":"${NAMESPACE}","CONTEXT":"${CONTEXT}", "HELM_APPLY_UPGRADE":"${HELM_APPLY_UPGRADE}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}

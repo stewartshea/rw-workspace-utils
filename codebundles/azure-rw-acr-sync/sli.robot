@@ -85,6 +85,12 @@ Suite Initialization
     ...    pattern=\w*
     ...    example=runwhen
     ...    default=runwhen
+    ${AZURE_RESOURCE_SUBSCRIPTION_ID}=    RW.Core.Import User Variable    AZURE_RESOURCE_SUBSCRIPTION_ID
+    ...    type=string
+    ...    description=The Azure Subscription ID for the resource.  
+    ...    pattern=\w*
+    Set Suite Variable    ${AZURE_RESOURCE_SUBSCRIPTION_ID}    ${AZURE_RESOURCE_SUBSCRIPTION_ID}
+
     Set Suite Variable    ${DOCKER_USERNAME}    ""
     Set Suite Variable    ${DOCKER_TOKEN}    ""
     ${USE_DOCKER_AUTH}=    RW.Core.Import User Variable
@@ -108,7 +114,7 @@ Suite Initialization
 
     Set Suite Variable
     ...    ${env}
-    ...    {"REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-sync", "TMPDIR":"/var/tmp/runwhen", "SYNC_IMAGES":"${SYNC_IMAGES}", "USE_DATE_TAG":"${USE_DATE_TAG}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}"}
+    ...    {"REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-sync", "TMPDIR":"/var/tmp/runwhen", "SYNC_IMAGES":"${SYNC_IMAGES}", "USE_DATE_TAG":"${USE_DATE_TAG}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}
 
 Import Docker Secrets
     ${DOCKER_USERNAME}=    RW.Core.Import Secret
