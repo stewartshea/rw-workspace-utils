@@ -8,16 +8,14 @@ CONTEXT="${CONTEXT:-cluster1}"  # Kubernetes context to use
 MAPPING_FILE="${CURDIR}/image_mappings.yaml"  # Generic mapping file
 HELM_APPLY_UPGRADE="${HELM_APPLY_UPGRADE:-false}"  # Set to "true" to apply upgrades
 REGISTRY_REPOSITORY_PATH="${REGISTRY_REPOSITORY_PATH:-runwhen}"  # Default repository root path
-
 HELM_REPO_URL="${HELM_REPO_URL:-https://runwhen-contrib.github.io/helm-charts}"
 HELM_REPO_NAME="${HELM_REPO_NAME:-runwhen-contrib}"
 HELM_CHART_NAME="${HELM_CHART_NAME:-runwhen-local}"
 WORKDIR="${WORKDIR:-./helm_work}" 
 
 # Clean temp update file
-rm -rf $WORKDIR || true
-mkdir -p $WORKDIR
-
+rm -rf "$WORKDIR" || true
+mkdir -p "$WORKDIR"
 
 # Check if AZURE_RESOURCE_SUBSCRIPTION_ID is set, otherwise get the current subscription ID
 if [ -z "$AZURE_RESOURCE_SUBSCRIPTION_ID" ]; then
@@ -33,7 +31,6 @@ echo "Switching to subscription ID: $subscription"
 az account set --subscription "$subscription" || { echo "Failed to set subscription."; exit 1; }
 az acr login -n "$REGISTRY_NAME"
 
-
 # Function to parse image into components
 parse_image() {
     local image=$1
@@ -41,7 +38,7 @@ parse_image() {
 
     registry=$(echo "$image" | cut -d '/' -f 1)
     repo=$(echo "$image" | cut -d '/' -f 2- | cut -d ':' -f 1)
-    tag=$(echo "$image" | awk -F ':' '{print $NF}')
+    tag=$(echo "$image" | rev | cut -d ':' -f 1 | rev)  # Ensures the tag is correctly extracted as a string
 
     echo "$registry" "$repo" "$tag"
 }
@@ -57,7 +54,7 @@ construct_set_flags() {
     local mapping_file=$1
     local updated_images=$2
     local set_flags=""
-    local resolved_mapping_file=$WORKDIR/resolved_mappings
+    local resolved_mapping_file="$WORKDIR/resolved_mappings"
 
     # Resolve placeholders in mapping file
     sed "s|\$REGISTRY_REPOSITORY_PATH|$REGISTRY_REPOSITORY_PATH|g" "$mapping_file" > "$resolved_mapping_file"
@@ -71,9 +68,9 @@ construct_set_flags() {
         fi
 
         normalized_repo=$(resolve_REGISTRY_REPOSITORY_PATH "$repo")
-        set_path=$(yq eval ".images[] | select(.image == \"$normalized_repo\") | .set_path" "$resolved_mapping_file" 2>/dev/null)
+        set_path=$(yq eval ".images[] | select(.image == \"$normalized_repo\") | .set_path" "$resolved_mapping_file" 2>/dev/null | sed 's/^"//;s/"$//')
         if [[ -n "$set_path" ]]; then
-            set_flags+="--set $set_path=$tag "
+            set_flags+="--set $set_path=\"$tag\" "
         fi
     done <<< "$updated_images"
 
@@ -114,7 +111,7 @@ while IFS= read -r image; do
     fi
 done <<< "$helm_images"
 
-echo "$updated_images" >> $WORKDIR/update_images
+echo "$updated_images" >> "$WORKDIR/update_images"
 
 if [[ -n "$updated_images" ]]; then
     echo "Constructing Helm upgrade command..."
@@ -127,7 +124,7 @@ if [[ -n "$updated_images" ]]; then
     else
         echo "Helm upgrade command (not applied):"
         echo "$helm_upgrade_command"
-        echo "true: $helm_upgrade_command" >> $WORKDIR/helm_update_required
+        echo "true: $helm_upgrade_command" >> "$WORKDIR/helm_update_required"
     fi
 else
     echo "No updates required. Helm release '$HELM_RELEASE' is up-to-date."

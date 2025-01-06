@@ -121,6 +121,7 @@ tasks:
           private_registry: azure_acr
           azure_acr_registry: runwhensandboxacr.azurecr.io
           azure_service_principal_secret_name: azure-sp
+          azure_acr_registry_subscriptionId: $ARM_SUBSCRIPTION_ID
         EOF
     silent: true
 
@@ -145,7 +146,7 @@ tasks:
 
         echo "Starting new container $CONTAINER_NAME..."
 
-        docker run --name $CONTAINER_NAME -p 8081:8081 -v "$(pwd)":/shared -d ghcr.io/runwhen-contrib/runwhen-local:0.8.2 || {
+        docker run -e DEBUG_LOGGING="true" --name $CONTAINER_NAME -p 8081:8081 -v "$(pwd)":/shared -d ghcr.io/runwhen-contrib/runwhen-local:latest || {
           echo "Failed to start container"; exit 1;
         }
 

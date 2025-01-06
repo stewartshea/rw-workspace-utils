@@ -300,8 +300,8 @@ runner:
     image:
       pullSecret: ""
       pullPolicy: ""
-      registry: ""
-      repository: "runwhen"
+      registry: "us-west1-docker.pkg.dev"
+      repository: ""
     # volumes common for all the pods created by the runner
     volumes: {}
 
