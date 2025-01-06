@@ -31,17 +31,24 @@ echo "Switching to subscription ID: $subscription"
 az account set --subscription "$subscription" || { echo "Failed to set subscription."; exit 1; }
 az acr login -n "$REGISTRY_NAME"
 
-# Function to parse image into components
 parse_image() {
     local image=$1
     local registry repo tag
 
+    # Extract registry, repo, and tag
     registry=$(echo "$image" | cut -d '/' -f 1)
     repo=$(echo "$image" | cut -d '/' -f 2- | cut -d ':' -f 1)
-    tag=$(echo "$image" | rev | cut -d ':' -f 1 | rev)  # Ensures the tag is correctly extracted as a string
+    tag=$(echo "$image" | rev | cut -d ':' -f 1 | rev)
 
+    # Normalize scientific notation to a plain integer if necessary
+    if [[ "$tag" =~ [0-9]+[eE][+-]?[0-9]+ ]]; then
+        tag=$(printf "%.0f" "$tag")  # Convert scientific notation to plain integer
+    fi
+
+    # Return components without quotes
     echo "$registry" "$repo" "$tag"
 }
+
 
 # Resolve ${REGISTRY_REPOSITORY_PATH}
 resolve_REGISTRY_REPOSITORY_PATH() {
