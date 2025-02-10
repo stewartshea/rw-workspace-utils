@@ -151,6 +151,48 @@ def run_tasks_for_slx(
         platform_logger.exception(e)
         return []
 
+def import_runsession_details(rw_runsession=None):
+    """
+    Fetch full RunSession details in JSON format.
+    If RW_USER_TOKEN is set, use it instead of the built-in token,
+    which can be useful for testing.
+
+    :param rw_runsession: (optional) The run session ID to fetch. 
+                          If not provided, uses RW_SESSION_ID from platform variables.
+    :return: JSON-encoded string of the run session details or None on error.
+    """
+    try:
+        if not rw_runsession:
+            rw_runsession = import_platform_variable("RW_SESSION_ID")
+
+        rw_workspace = import_platform_variable("RW_WORKSPACE")
+        rw_workspace_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError:
+        BuiltIn().log("Failure importing required variables", level='WARN')
+        return None
+
+    url = f"{rw_workspace_api_url}/{rw_workspace}/runsessions/{rw_runsession}"
+    BuiltIn().log(f"Importing runsession variable with URL: {url}, runsession {rw_runsession}", level='INFO')
+    
+    # Use RW_USER_TOKEN if it is set, otherwise use the authenticated session
+    user_token = os.getenv("RW_USER_TOKEN")
+    if user_token:
+        headers = {"Authorization": f"Bearer {user_token}"}
+        session = requests.Session()
+        session.headers.update(headers)
+    else:
+        session = platform.get_authenticated_session()
+
+    try:
+        rsp = session.get(url, timeout=10, verify=platform.REQUEST_VERIFY)
+        rsp.raise_for_status()
+        return json.dumps(rsp.json())
+    except (requests.ConnectTimeout, requests.ConnectionError, json.JSONDecodeError) as e:
+        warning_log(f"Exception while trying to get runsession details: {e}", str(e), str(type(e)))
+        platform_logger.exception(e)
+        return json.dumps(None)
+
+
 
 ## This is an edit of the core platform keyword that was having trouble
 ## This has been been rewritten to avoid debugging core keywords that follow
@@ -216,3 +258,42 @@ def import_platform_variable(varname: str) -> str:
     if not val:
         raise ImportError(f"Import Platform Variable: {varname} has no value defined.")
     return val
+
+
+def import_related_runsession_details(json_string):
+    """
+    This keyword:
+      1. Parses the provided JSON string into a Python dictionary.
+      2. Extracts the 'runsessionId' from the 'notes' field in the dictionary.
+      3. Calls 'import_runsession_details' with that runsession ID.
+      4. Returns the JSON string with the runsession details, or None on error.
+
+    :param json_string: (str) The full JSON of the run session record. 
+                        Must contain a 'notes' field that holds a JSON string 
+                        with a 'runsessionId' key.
+    :return: (str) JSON-encoded string containing the runsession details, or None on error.
+    """
+    # Parse the main JSON data
+    data = json.loads(json_string)
+    
+    # 'notes' is itself a JSON string, so parse again
+    notes_str = data.get("notes", "{}")
+    try:
+        notes_data = json.loads(notes_str)
+    except json.JSONDecodeError:
+        BuiltIn().log("Unable to parse 'notes' field as JSON. Returning None.", level="WARN")
+        return None
+
+    runsession_id = notes_data.get("runsessionId")
+    if not runsession_id:
+        BuiltIn().log(
+            "No 'runsessionId' found in 'notes' field. Returning None.", 
+            level="WARN"
+        )
+        return None
+    
+    BuiltIn().log(f"Fetching runsession details for ID: {runsession_id}", level="INFO")
+    # Call the updated import_runsession_details, passing the runsession ID
+    details_json = import_runsession_details(rw_runsession=runsession_id)
+
+    return details_json
