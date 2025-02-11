@@ -48,7 +48,8 @@ Create GitHub Issue in Repository `${GITHUB_REPOSITORY}` from RunSession
     ...    format=markdown
     ${runsession_url}=    RW.RunSession.Get RunSession URL    ${session_list["id"]}
     ${key_resource}=    RW.RunSession.Get Most Referenced Resource    ${SESSION}
-    ${title}=    Set Variable    [RunWhen] ${open_issue_count} open issue(s) from ${session_list["source"]} related to `${key_resource}`
+    ${source}=              RW.RunSession.Get RunSession Source    ${session_list}
+    ${title}=               Set Variable    [RunWhen] ${open_issue_count} open issue(s) from ${source} related to `${key_resource}`
     
     Add Pre To Report    Title: ${title}
     Add Pre To Report    Total Open Issues:${open_issue_count}

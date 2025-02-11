@@ -17,6 +17,51 @@ def get_runsession_url(rw_runsession=None):
     runsession_url = f"{rw_workspace_app_url}/map/{rw_workspace}?selectedRunSessions={rw_runsession}"
     return runsession_url
 
+def get_runsession_source(payload: dict) -> str:
+    """
+    Given a RunWhen payload dictionary, return the "source" string based on:
+      1) If top-level "source" key exists, return that
+      2) Otherwise, look at the first (earliest) runRequest by 'created' time, and
+         check in order:
+             fromSearchQuery, fromIssue, fromSliAlert, fromAlert
+         Return the name of whichever key is non-null. 
+      3) If nothing is found, return "Unknown".
+    """
+
+    # 1) Check for a top-level 'source' key
+    if "source" in payload:
+        return payload["source"]
+
+    # 2) Otherwise, examine runRequests
+    run_requests = payload.get("runRequests", [])
+    if not run_requests:
+        return "Unknown"
+
+    # Sort runRequests by created time to find the earliest
+    def _parse_iso_datetime(dt: str) -> datetime:
+        # '2025-02-11T08:49:06.773513Z' -> parse with replacement of 'Z' to '+00:00'
+        return datetime.fromisoformat(dt.replace("Z", "+00:00"))
+
+    sorted_requests = sorted(run_requests, key=lambda rr: _parse_iso_datetime(rr["created"]))
+    earliest_rr = sorted_requests[0]
+
+    # 3) Check the relevant fields in the earliest runRequest
+    source_keys = ["fromSearchQuery", "fromIssue", "fromSliAlert", "fromAlert"]
+    for key in source_keys:
+        val = earliest_rr.get(key)
+        if val:
+            # "fromSearchQuery" -> "searchQuery"
+            # "fromIssue"       -> "issue"
+            # "fromSliAlert"    -> "sliAlert"
+            # "fromAlert"       -> "alert"
+            stripped = key[4:]  # removes "from", leaving e.g. "SearchQuery"
+            # optionally lowercase the first character:
+            stripped = stripped[0].lower() + stripped[1:]
+            return stripped
+    # 4) If no source found
+    return "Unknown"
+
+
 def count_open_issues(data: str):
     """Return a count of issues that have not been closed."""
     open_issues = 0 
@@ -66,31 +111,71 @@ def get_open_issues(data: str):
                 open_issue_list.append(issue)
     return open_issue_list
 
-def summarize_runsession_users(data: str, format: str = "text"):
-    runsession = json.loads(data)
+def summarize_runsession_users(data: str, output_format: str = "text") -> str:
+    """
+    Parse a JSON string representing a RunWhen 'runsession' object
+    (with 'runRequests' entries), gather the unique participants and
+    the engineering assistants involved, and return a summary in either
+    plain text or Markdown format.
+
+    :param data: JSON string with top-level 'runRequests' list, each item
+                 possibly containing 'requester' and 'persona->spec->fullName'.
+    :param output_format: "text" or "markdown" (default: "text").
+    :return: A string summarizing the participants and engineering assistants.
+    """
+    try:
+        runsession = json.loads(data)
+    except json.JSONDecodeError:
+        # If the payload is not valid JSON, handle or raise
+        return "Error: Could not decode JSON from input."
+
+    # Prepare sets to avoid duplicates
     participants = set()
     engineering_assistants = set()
-    
+
+    # Gather data from each runRequest if present
     for request in runsession.get("runRequests", []):
-        persona = request.get("persona", {})
-        persona_full_name = persona.get("spec", {}).get("fullName", "Unknown")
-        requester = request.get("requester", "Unknown")
-        
-        if requester is None:
+        # Extract persona full name
+        persona = request.get("persona") or {}
+        spec = persona.get("spec") or {}
+        persona_full_name = spec.get("fullName", "Unknown")
+
+        # Extract requester
+        requester = request.get("requester")
+        if not requester:
             requester = "Unknown"
-        
+
+        # Normalize system requesters
         if "@workspaces.runwhen.com" in requester:
             requester = "RunWhen System"
-        
+
+        # Add to sets
         participants.add(requester)
         engineering_assistants.add(persona_full_name)
-    if format == "markdown": 
-        markdown_output = "#### Participants:\n" + "\n".join([f"- {participant}" for participant in sorted(participants)])
-        markdown_output += "\n" + "\n".join([f"- {assistant} (Engineering Assistant)" for assistant in sorted(engineering_assistants)])
-        return markdown_output
-    else: 
-        text_output="\n".join([f"{assistant} (Engineering Assistant)" for assistant in sorted(engineering_assistants)])
-        return text_output
+
+    # Format output
+    if output_format.lower() == "markdown":
+        # Construct a Markdown list
+        lines = ["#### Participants:"]
+        # Participants
+        for participant in sorted(participants):
+            lines.append(f"- {participant}")
+        # Engineering assistants
+        lines.append("\n#### Engineering Assistants:")
+        for assistant in sorted(engineering_assistants):
+            lines.append(f"- {assistant}")
+        return "\n".join(lines)
+    else:
+        # Plain text
+        text_lines = []
+        text_lines.append("Participants:")
+        for participant in sorted(participants):
+            text_lines.append(f"  - {participant}")
+        text_lines.append("")
+        text_lines.append("Engineering Assistants:")
+        for assistant in sorted(engineering_assistants):
+            text_lines.append(f"  - {assistant}")
+        return "\n".join(text_lines)
 
 def extract_issue_keywords(data: str):
     runsession = json.loads(data) 
