@@ -65,7 +65,9 @@ Create GitHub Issue in Repository `${GITHUB_REPOSITORY}` from RunSession
         
         # TODO Add http rsp code and open issue if rsp fails
         Add To Report    [GitHub Issue Created](${github_issue["html_url"]})
+        Add To Report      Open Issues Found in [RunSession ${session_list["id"]}](${runsession_url})
+
     ELSE
-        Add To Report      No Open Issues Found
+        Add To Report      No Open Issues Found in [RunSession ${session_list["id"]}](${runsession_url})
     END
 
