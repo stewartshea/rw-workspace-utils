@@ -32,7 +32,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade build twine
+          pip install --upgrade packaging setuptools wheel build twine
           # If your code needs a symlink from libraries/RW -> RW, do that here:
           ln -s libraries/RW RW || true
 
