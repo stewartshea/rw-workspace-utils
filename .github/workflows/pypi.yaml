@@ -30,9 +30,14 @@ jobs:
       - name: Build Package
         run: |-
           pip install setuptools wheel twine
+          ln -s libraries/RW RW
+          grep -ri "description-file" .
+          grep -ri "license-file" .
+          rm -rf dist build *.egg-info
           python setup.py sdist bdist_wheel
       - name: Publish
         run: |-
+          twine check dist/*
           twine upload dist/* -u __token__ -p ${{ secrets.PYPI_TOKEN }}
       - name: Notify Slack of pip update
         uses: slackapi/slack-github-action@v1.19.0
