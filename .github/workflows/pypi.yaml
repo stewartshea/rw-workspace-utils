@@ -31,6 +31,7 @@ jobs:
       - name: Build Package
         run: |-
           pip install setuptools wheel twine
+          rm -rf build dist *.egg-info
           ln -s libraries/RW RW
           python setup.py sdist bdist_wheel
       - name: Publish
