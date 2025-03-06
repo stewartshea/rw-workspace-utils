@@ -27,12 +27,9 @@ jobs:
             echo "VERSION file is missing or empty" >&2
             exit 1
           fi
-
       - name: Build Package
         run: |-
           pip install setuptools wheel twine
-          rm -rf build dist *.egg-info
-          ln -s libraries/RW RW
           python setup.py sdist bdist_wheel
       - name: Publish
         run: |-
