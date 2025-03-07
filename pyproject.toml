@@ -9,7 +9,7 @@ description = "RunWhen workspace utilities"
 authors = [
   { name = "Your Name", email = "you@example.com" }
 ]
-license = "Apache-2.0"
+license = { file = "LICENSE" }
 
 [tool.setuptools.packages.find]
 where = ["libraries"]  # or ["src"] if using src layout
