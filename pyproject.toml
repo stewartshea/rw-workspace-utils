@@ -1,7 +1,15 @@
 [build-system]
-requires = [
-  "setuptools>=46.0",
-  "wheel",
-  "packaging>=23.0"
-]
+requires = ["setuptools>=42", "wheel", "build"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "rw-workspace-utils"  # distribution name on PyPI
+version = "0.0.1"
+description = "RunWhen workspace utilities"
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+license = "Apache-2.0"
+
+[tool.setuptools.packages.find]
+where = ["libraries"]  # or ["src"] if using src layout
