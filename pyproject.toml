@@ -1,15 +1,26 @@
 [build-system]
-requires = ["setuptools>=42", "wheel", "build"]
+requires = ["setuptools>=61.2", "wheel", "build"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rw-workspace-utils"  # distribution name on PyPI
-version = "0.0.1"
+name = "rw-workspace-utils"
+version = { file = "VERSION" }
+readme = "README.md"
+license = { text = "Apache License 2.0" }
 description = "RunWhen workspace utilities"
 authors = [
-  { name = "Your Name", email = "you@example.com" }
+    { name = "RunWhen", email = "info@runwhen.com" }
 ]
-license = { file = "LICENSE" }
-
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License"
+]
 [tool.setuptools.packages.find]
-where = ["libraries"]  # or ["src"] if using src layout
+where = ["libraries"] 
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+dependencies = { file = "requirements.txt" }
+
+[project.urls]
+homepage = "https://github.com/runwhen-contrib/rw-workspace-utils"
