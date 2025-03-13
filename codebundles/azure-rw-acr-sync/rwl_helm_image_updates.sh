@@ -6,17 +6,16 @@
 HELM_REPO_URL=$1   # Helm repository URL
 HELM_REPO_NAME=$2  # Helm repository name
 HELM_CHART_NAME=$3 # Helm chart name
-export WORKDIR=${WORKDIR:-"./helm_work"}  # Output directory for all temporary files
-OUTPUT_JSON="$WORKDIR/images_to_update.json"
-RENDERED_YAML="$WORKDIR/rendered_chart.yaml"
-REGISTRIES_TXT="$WORKDIR/registries.txt"
+OUTPUT_JSON="images_to_update.json"
+RENDERED_YAML="rendered_chart.yaml"
+REGISTRIES_TXT="registries.txt"
 USE_DATE_TAG=${USE_DATE_TAG:-false} # Default is to not use date-based tags
 export DATE_TAG=${DATE_TAG:-$(date +%Y%m%d%H%M%S)} # Default date tag if enabled
 # Ensure Helm cache and repositories are correctly set
 
-export HELM_CACHE_HOME="$TMPDIR/helm"
-export HELM_CONFIG_HOME="/$TMPDIR/helm/config"
-export HELM_DATA_HOME="$TMPDIR/helm/data"
+export HELM_CACHE_HOME="./helm"
+export HELM_CONFIG_HOME="./helm/config"
+export HELM_DATA_HOME="./helm/data"
 
 
 # Registry-specific variables
@@ -229,7 +228,7 @@ function pull_and_render_chart() {
     local chart_name=$2
     local chart_version=$3
 
-    local chart_dir="$WORKDIR/$chart_name"
+    local chart_dir="$chart_name"
 
     if [[ -d "$chart_dir" ]]; then
         echo "Cleaning up existing directory: $chart_dir..."
@@ -237,7 +236,7 @@ function pull_and_render_chart() {
     fi
 
     echo "Pulling Helm chart: $chart_name (version: $chart_version) from $repo_name..."
-    helm pull "$repo_name/$chart_name" --version "$chart_version" --untar --untardir "$WORKDIR"
+    helm pull "$repo_name/$chart_name" --version "$chart_version" --untar --untardir "."
 
     echo "Resolving dependencies for $chart_dir..."
     add_dependencies_repos "$chart_dir"
@@ -249,10 +248,10 @@ function pull_and_render_chart() {
     fi
 
     echo "Building Helm dependencies for $chart_name..."
-    env > "$WORKDIR/debug_env.txt"
-    echo "Current PATH: $PATH" >> "$WORKDIR/debug_env.log"
-    helm repo list > "$WORKDIR/debug_helm.txt"
-    ls -l "$WORKDIR" > "$WORKDIR/debug_ls.txt"
+    env > "debug_env.txt"
+    echo "Current PATH: $PATH" >> "debug_env.log"
+    helm repo list > "debug_helm.txt"
+    ls -l "." > "debug_ls.txt"
 
     pushd "$chart_dir" > /dev/null
     helm dependency build --debug # || { echo "Failed to build dependencies for $chart_name. Exiting."; exit 1; }
@@ -289,7 +288,7 @@ function extract_images() {
     echo "Extracting image configurations from rendered YAML..."
 
     > "$REGISTRIES_TXT"
-    > "$WORKDIR/image_paths.txt"
+    > "image_paths.txt"
 
     # Extract "image:" entries from the rendered YAML
     while IFS= read -r line; do
@@ -526,8 +525,6 @@ jq --version >/dev/null 2>&1 || { echo "jq not installed. Exiting."; exit 1; }
 skopeo --version >/dev/null 2>&1 || { echo "Skopeo not installed. Exiting."; exit 1; }
 
 
-# Create work directory
-rm -rf "$WORKDIR" && mkdir -p "$WORKDIR"
 
 setup_helm_repo "$HELM_REPO_URL" "$HELM_REPO_NAME"
 latest_version=$(get_latest_chart_version "$HELM_REPO_NAME" "$HELM_CHART_NAME")

@@ -24,7 +24,7 @@ Check for Available RunWhen Helm Images in ACR Registry`${REGISTRY_NAME}`
     ...    include_in_history=false
     ...    show_in_rwl_cheatsheet=false
     ${image_update_count}=    RW.CLI.Run Cli
-    ...    cmd=[ -f "$WORKDIR/update_images" ] && cat "$WORKDIR/update_images" | grep -v '^$' | wc -l
+    ...    cmd=[ -f "update_images" ] && cat "update_images" | grep -v '^$' | wc -l
     ...    env=${env}
     ...    include_in_history=false 
 
@@ -87,4 +87,4 @@ Suite Initialization
 
     Set Suite Variable
     ...    ${env}
-    ...    {"CURDIR":"${CURDIR}", "KUBECONFIG":"./${kubeconfig.key}", "HELM_RELEASE":"${HELM_RELEASE}","REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-helm-update", "NAMESPACE":"${NAMESPACE}","CONTEXT":"${CONTEXT}", "HELM_APPLY_UPGRADE":"${HELM_APPLY_UPGRADE}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}
+    ...    {"KUBECONFIG":"./${kubeconfig.key}", "HELM_RELEASE":"${HELM_RELEASE}","REGISTRY_NAME":"${REGISTRY_NAME}", "NAMESPACE":"${NAMESPACE}","CONTEXT":"${CONTEXT}", "HELM_APPLY_UPGRADE":"${HELM_APPLY_UPGRADE}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}

@@ -1,6 +1,5 @@
 export REGISTRY_NAME="runwhensandboxacr.azurecr.io"
 export REGISTRY_REPOSITORY_PATH="runwhen"
-export WORKDIR=/robot_logs/azure-rw-acr-sync
 export SYNC_IMAGES="true"
 export REGISTRY_TYPE="acr"
 export USE_DATE_TAG="true"

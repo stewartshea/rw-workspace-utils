@@ -6,4 +6,4 @@ pyyaml
 docker 
 azure-containerregistry 
 azure-identity 
-rw-cli-keywords>=0.0.19
+rw-cli-keywords>=0.0.23

@@ -46,7 +46,7 @@ Check for RunWhen Local Image Updates against ACR Registry`${REGISTRY_NAME}`
     ...    show_in_rwl_cheatsheet=false
 
     ${image_update_count}=    RW.CLI.Run Cli
-    ...    cmd=cat ${OUTPUT DIR}/azure-rw-acr-sync/images_to_update.json | jq 'to_entries | map(select(.value.update_required == true)) | from_entries | length '| tr -d '\n'
+    ...    cmd=cat images_to_update.json | jq 'to_entries | map(select(.value.update_required == true)) | from_entries | length '| tr -d '\n'
     ...    env=${env}
     ...    include_in_history=false
 
@@ -114,7 +114,7 @@ Suite Initialization
 
     Set Suite Variable
     ...    ${env}
-    ...    {"REGISTRY_NAME":"${REGISTRY_NAME}", "WORKDIR":"${OUTPUT DIR}/azure-rw-acr-sync", "TMPDIR":"/var/tmp/runwhen", "SYNC_IMAGES":"${SYNC_IMAGES}", "USE_DATE_TAG":"${USE_DATE_TAG}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}
+    ...    {"REGISTRY_NAME":"${REGISTRY_NAME}", "SYNC_IMAGES":"${SYNC_IMAGES}", "USE_DATE_TAG":"${USE_DATE_TAG}", "REGISTRY_REPOSITORY_PATH":"${REGISTRY_REPOSITORY_PATH}", "AZURE_RESOURCE_SUBSCRIPTION_ID":"${AZURE_RESOURCE_SUBSCRIPTION_ID}"}
 
 Import Docker Secrets
     ${DOCKER_USERNAME}=    RW.Core.Import Secret

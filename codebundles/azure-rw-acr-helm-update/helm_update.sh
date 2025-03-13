@@ -5,17 +5,13 @@ REGISTRY_NAME="${REGISTRY_NAME:-myacr.azurecr.io}"  # Full Azure Container Regis
 NAMESPACE="${NAMESPACE:-runwhen-local}"  # Kubernetes namespace
 HELM_RELEASE="${HELM_RELEASE:-runwhen-local}"  # Helm release name
 CONTEXT="${CONTEXT:-cluster1}"  # Kubernetes context to use
-MAPPING_FILE="${CURDIR}/image_mappings.yaml"  # Generic mapping file
+MAPPING_FILE="image_mappings.yaml"  # Generic mapping file
 HELM_APPLY_UPGRADE="${HELM_APPLY_UPGRADE:-false}"  # Set to "true" to apply upgrades
 REGISTRY_REPOSITORY_PATH="${REGISTRY_REPOSITORY_PATH:-runwhen}"  # Default repository root path
 HELM_REPO_URL="${HELM_REPO_URL:-https://runwhen-contrib.github.io/helm-charts}"
 HELM_REPO_NAME="${HELM_REPO_NAME:-runwhen-contrib}"
 HELM_CHART_NAME="${HELM_CHART_NAME:-runwhen-local}"
-WORKDIR="${WORKDIR:-./helm_work}" 
 
-# Clean temp update file
-rm -rf "$WORKDIR" || true
-mkdir -p "$WORKDIR"
 
 # Check if AZURE_RESOURCE_SUBSCRIPTION_ID is set, otherwise get the current subscription ID
 if [ -z "$AZURE_RESOURCE_SUBSCRIPTION_ID" ]; then
@@ -60,7 +56,7 @@ construct_set_flags() {
     local mapping_file=$1
     local updated_images=$2
     local set_flags=""
-    local resolved_mapping_file="$WORKDIR/resolved_mappings"
+    local resolved_mapping_file="resolved_mappings"
 
     # Resolve placeholders in mapping file
     sed "s|\$REGISTRY_REPOSITORY_PATH|$REGISTRY_REPOSITORY_PATH|g" "$mapping_file" > "$resolved_mapping_file"
@@ -119,7 +115,7 @@ while IFS= read -r image; do
     fi
 done <<< "$helm_images"
 
-echo "$updated_images" >> "$WORKDIR/update_images"
+echo "$updated_images" >> "update_images"
 
 if [[ -n "$updated_images" ]]; then
     echo "Constructing Helm upgrade command..."
@@ -136,7 +132,7 @@ if [[ -n "$updated_images" ]]; then
     else
         echo "Helm upgrade command (not applied):"
         echo "$helm_upgrade_command"
-        echo "true: $helm_upgrade_command" >> "$WORKDIR/helm_update_required"
+        echo "true: $helm_upgrade_command" >> "helm_update_required"
     fi
 else
     echo "No updates required. Helm release '$HELM_RELEASE' is up-to-date."

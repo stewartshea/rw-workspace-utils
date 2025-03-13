@@ -1,9 +1,8 @@
 #!/bin/bash
 
-WORKDIR=${WORKDIR:-"./helm_work"}  # Output directory for all temporary files
-OUTPUT_JSON="$WORKDIR/cc_images_to_update.json"
-RENDERED_YAML="$WORKDIR/rendered_chart.yaml"
-REGISTRIES_TXT="$WORKDIR/registries.txt"
+OUTPUT_JSON="cc_images_to_update.json"
+RENDERED_YAML="rendered_chart.yaml"
+REGISTRIES_TXT="registries.txt"
 
 # Registry-specific variables
 REGISTRY_TYPE=${REGISTRY_TYPE:-"acr"} # Default to ACR, can be "acr", "artifactory", "gcr", etc.
