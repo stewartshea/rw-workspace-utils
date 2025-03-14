@@ -4,7 +4,7 @@ Workspace keyword library for performing tasks for interacting with Workspace re
 Scope: Global
 """
 
-import re, logging, json, jmespath, requests, os
+import re, logging, json, jmespath, requests, os, time
 from datetime import datetime
 from robot.libraries.BuiltIn import BuiltIn
 
@@ -260,23 +260,72 @@ def import_platform_variable(varname: str) -> str:
     return val
 
 
-def import_related_runsession_details(json_string):
+# def import_related_runsession_details(json_string):
+#     """
+#     This keyword:
+#       1. Parses the provided JSON string into a Python dictionary.
+#       2. Extracts the 'runsessionId' from the 'notes' field in the dictionary.
+#       3. Calls 'import_runsession_details' with that runsession ID.
+#       4. Returns the JSON string with the runsession details, or None on error.
+
+#     :param json_string: (str) The full JSON of the run session record. 
+#                         Must contain a 'notes' field that holds a JSON string 
+#                         with a 'runsessionId' key.
+#     :return: (str) JSON-encoded string containing the runsession details, or None on error.
+#     """
+#     # Parse the main JSON data
+#     data = json.loads(json_string)
+    
+#     # 'notes' is itself a JSON string, so parse again
+#     notes_str = data.get("notes", "{}")
+#     try:
+#         notes_data = json.loads(notes_str)
+#     except json.JSONDecodeError:
+#         BuiltIn().log("Unable to parse 'notes' field as JSON. Returning None.", level="WARN")
+#         return None
+
+#     runsession_id = notes_data.get("runsessionId")
+#     if not runsession_id:
+#         BuiltIn().log(
+#             "No 'runsessionId' found in 'notes' field. Returning None.", 
+#             level="WARN"
+#         )
+#         return None
+    
+#     BuiltIn().log(f"Fetching runsession details for ID: {runsession_id}", level="INFO")
+#     # Call the updated import_runsession_details, passing the runsession ID
+#     details_json = import_runsession_details(rw_runsession=runsession_id)
+
+#     return details_json
+def import_related_runsession_details(
+    json_string: str,
+    api_token: platform.Secret = None,
+    poll_interval: float = 5.0,
+    max_wait_seconds: float = 300.0
+) -> str:
     """
     This keyword:
       1. Parses the provided JSON string into a Python dictionary.
       2. Extracts the 'runsessionId' from the 'notes' field in the dictionary.
-      3. Calls 'import_runsession_details' with that runsession ID.
-      4. Returns the JSON string with the runsession details, or None on error.
+      3. Polls the indicated RunSession until the runRequests stop growing for
+         three consecutive checks, or until max_wait_seconds passes.
+      4. Returns the final RunSession JSON (as a string) once stable, or None on error
+         (and raises a TimeoutError if stability is never reached).
 
-    :param json_string: (str) The full JSON of the run session record. 
-                        Must contain a 'notes' field that holds a JSON string 
-                        with a 'runsessionId' key.
-    :return: (str) JSON-encoded string containing the runsession details, or None on error.
+    :param json_string: (str) The full JSON of some record containing 'notes',
+                        which in turn contains a 'runsessionId'.
+    :param api_token: (platform.Secret) Optional. If provided, will be used as the bearer token
+                      for the polling requests. Otherwise, logic will attempt to use
+                      RW_USER_TOKEN or the default platform-authenticated session.
+    :param poll_interval: (float) Seconds to sleep between polls. Defaults to 5s.
+    :param max_wait_seconds: (float) Maximum total seconds before timing out. Defaults to 300s.
+    :return: (str) JSON-encoded string containing the final RunSession details once stable,
+                   or None if there's an error fetching it.
+    :raises TimeoutError: If the RunSession never stabilizes within max_wait_seconds.
     """
-    # Parse the main JSON data
+
+    # 1) Parse out the runsessionId from the JSON string
     data = json.loads(json_string)
-    
-    # 'notes' is itself a JSON string, so parse again
     notes_str = data.get("notes", "{}")
     try:
         notes_data = json.loads(notes_str)
@@ -291,9 +340,82 @@ def import_related_runsession_details(json_string):
             level="WARN"
         )
         return None
-    
-    BuiltIn().log(f"Fetching runsession details for ID: {runsession_id}", level="INFO")
-    # Call the updated import_runsession_details, passing the runsession ID
-    details_json = import_runsession_details(rw_runsession=runsession_id)
 
-    return details_json
+    # 2) Gather workspace/env variables needed for polling
+    try:
+        rw_workspace = import_platform_variable("RW_WORKSPACE")
+        rw_workspace_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError as e:
+        BuiltIn().log(f"Failure importing required variables: {e}", level="WARN")
+        return None
+
+    # Build the endpoint URL
+    endpoint = f"{rw_workspace_api_url}/{rw_workspace}/runsessions/{runsession_id}"
+
+    BuiltIn().log(f"Polling RunSession for stability: {endpoint}", level="INFO")
+
+    # 3) Construct a requests.Session that uses either:
+    #    - The explicitly-provided api_token (platform.Secret) if given
+    #    - The RW_USER_TOKEN if set
+    #    - Otherwise, the default platform.get_authenticated_session()
+    if api_token:
+        # Use the platform.Secret for Bearer auth
+        headers = {
+            "Authorization": f"Bearer {api_token.value}",
+            "Accept": "application/json"
+        }
+        session = requests.Session()
+        session.headers.update(headers)
+    else:
+        user_token = os.getenv("RW_USER_TOKEN")
+        if user_token:
+            session = requests.Session()
+            session.headers.update({"Authorization": f"Bearer {user_token}"})
+        else:
+            session = platform.get_authenticated_session()
+
+    stable_count = 0
+    last_length = None
+    start_time = time.time()
+
+    # 4) Poll the RunSession until stable or timeout
+    while True:
+        try:
+            resp = session.get(endpoint, timeout=10, verify=platform.REQUEST_VERIFY)
+            resp.raise_for_status()
+            session_data = resp.json()
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            BuiltIn().log(
+                f"Error fetching RunSession {runsession_id}: {e}",
+                level="WARN"
+            )
+            return None
+
+        # Count the runRequests
+        run_requests = session_data.get("runRequests", [])
+        current_length = len(run_requests)
+
+        # Check if count is stable
+        if last_length is not None and current_length == last_length:
+            stable_count += 1
+        else:
+            stable_count = 0
+        last_length = current_length
+
+        # If stable for 3 consecutive polls, return
+        if stable_count >= 3:
+            BuiltIn().log(
+                f"RunSession {runsession_id} is stable with {current_length} runRequests.",
+                level="INFO"
+            )
+            return json.dumps(session_data)  # return the final JSON as a string
+
+        # Check for timeout
+        elapsed = time.time() - start_time
+        if elapsed > max_wait_seconds:
+            raise TimeoutError(
+                f"RunSession {runsession_id} did not stabilize within {max_wait_seconds} seconds."
+            )
+
+        # Sleep before next poll
+        time.sleep(poll_interval)

@@ -1,20 +1,13 @@
-# local auth directory for sensitive files that should not be stored in git
-auth
-# generic codecollection repo/development path
-*codecollection*
-scratch
-.env
+*codecollection.yaml
 __pycache__
-*robot_logs*
-.python-version
-.vscode/settings.json
-node_modules/
-package-lock.json
-package.json
-
-src/rw-cli-codecollection-cache
-**tf.local**
-**tf.secret**
+output.xml
+log.html
+report.html
+dist
+build
+*egg-info
+.kube
+*.out
 
 # Ignore Terraform state files
 **/terraform.tfstate
@@ -49,6 +42,12 @@ src/rw-cli-codecollection-cache
 # Ignore RunWhen Local test files
 **/workspaceInfo.yaml**
 **kubeconfig**
-**/output/
+**/.test/output/
 **/.test/.task/**
 .vscode/settings.json
+**/auth/**
+**.secret**
+**.suite_temp
+**.secret**
+**.pem
+**.pfx
