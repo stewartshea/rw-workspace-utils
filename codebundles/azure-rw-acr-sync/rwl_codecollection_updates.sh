@@ -60,6 +60,9 @@ codecollection_images=$(cat <<EOF
     },
     "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-rw-workspace-utils-main": {
         "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-rw-workspace-utils-main"
+    },
+    "us-west1-docker.pkg.dev/runwhen-nonprod-beta/public-images/runwhen-contrib-azure-c7n-codecollection-main": {
+        "destination": "$REGISTRY_REPOSITORY_PATH/runwhen-contrib-azure-c7n-codecollection-main"
     }
 }
 EOF
