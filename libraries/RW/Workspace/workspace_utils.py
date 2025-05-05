@@ -259,44 +259,6 @@ def import_platform_variable(varname: str) -> str:
         raise ImportError(f"Import Platform Variable: {varname} has no value defined.")
     return val
 
-
-# def import_related_runsession_details(json_string):
-#     """
-#     This keyword:
-#       1. Parses the provided JSON string into a Python dictionary.
-#       2. Extracts the 'runsessionId' from the 'notes' field in the dictionary.
-#       3. Calls 'import_runsession_details' with that runsession ID.
-#       4. Returns the JSON string with the runsession details, or None on error.
-
-#     :param json_string: (str) The full JSON of the run session record. 
-#                         Must contain a 'notes' field that holds a JSON string 
-#                         with a 'runsessionId' key.
-#     :return: (str) JSON-encoded string containing the runsession details, or None on error.
-#     """
-#     # Parse the main JSON data
-#     data = json.loads(json_string)
-    
-#     # 'notes' is itself a JSON string, so parse again
-#     notes_str = data.get("notes", "{}")
-#     try:
-#         notes_data = json.loads(notes_str)
-#     except json.JSONDecodeError:
-#         BuiltIn().log("Unable to parse 'notes' field as JSON. Returning None.", level="WARN")
-#         return None
-
-#     runsession_id = notes_data.get("runsessionId")
-#     if not runsession_id:
-#         BuiltIn().log(
-#             "No 'runsessionId' found in 'notes' field. Returning None.", 
-#             level="WARN"
-#         )
-#         return None
-    
-#     BuiltIn().log(f"Fetching runsession details for ID: {runsession_id}", level="INFO")
-#     # Call the updated import_runsession_details, passing the runsession ID
-#     details_json = import_runsession_details(rw_runsession=runsession_id)
-
-#     return details_json
 def import_related_runsession_details(
     json_string: str,
     api_token: platform.Secret = None,
@@ -419,3 +381,85 @@ def import_related_runsession_details(
 
         # Sleep before next poll
         time.sleep(poll_interval)
+
+def get_slxs_with_entity_reference(
+    entity_refs: list[str],
+) -> list:
+    """Return all SLXs that reference (by alias, tag, configProvided, or additionalContext)
+    any of the entity identifiers in *entity_refs*.
+
+    Args:
+        entity_refs (list[str]): Identifiers (e.g. “CUSTOM_DEVICE-…”, resource names, etc.)
+                                 to look for.  Matching is **case-insensitive** and done
+                                 with simple substring search.
+
+    Returns:
+        list: SLX objects that contain at least one of the identifiers.
+    """
+    # ------------------------------------------------------------------ #
+    # 1)  Gather workspace-scoped variables
+    # ------------------------------------------------------------------ #
+    try:
+        rw_workspace        = import_platform_variable("RW_WORKSPACE")
+        rw_workspace_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError:
+        return []
+
+    # ------------------------------------------------------------------ #
+    # 2)  Fetch all SLXs for the workspace
+    # ------------------------------------------------------------------ #
+    session = platform.get_authenticated_session()
+    url     = f"{rw_workspace_api_url}/{rw_workspace}/slxs"
+
+    try:
+        resp = session.get(url, timeout=10)
+        resp.raise_for_status()
+        all_slxs = resp.json().get("results", [])
+    except (
+        requests.ConnectTimeout,
+        requests.ConnectionError,
+        json.JSONDecodeError,
+    ) as e:
+        warning_log(
+            f"Exception while trying to get SLXs in workspace {rw_workspace}: {e}",
+            str(e),
+            str(type(e)),
+        )
+        platform_logger.exception(e)
+        return []
+
+    # ------------------------------------------------------------------ #
+    # 3)  Build a lowercase set of search terms for fast membership tests
+    # ------------------------------------------------------------------ #
+    search_terms = {s.lower() for s in entity_refs if isinstance(s, str) and s}
+
+    # ------------------------------------------------------------------ #
+    # 4)  Scan each SLX for any occurrence of the search terms
+    # ------------------------------------------------------------------ #
+    matching_slxs: list = []
+
+    for slx in all_slxs:
+        spec = slx.get("spec", {})
+
+        # a) Alias
+        corpus = [spec.get("alias", "")]
+
+        # b)   tags -> [{"name": "x", "value": "y"}, ...]
+        for t in spec.get("tags", []):
+            corpus.extend([t.get("name", ""), t.get("value", "")])
+
+        # c)   configProvided -> [{"name": "AZ_RG", "value": "foo"}, ...]
+        for cp in spec.get("configProvided", []):
+            corpus.extend([cp.get("name", ""), cp.get("value", "")])
+
+        # d)   additionalContext -> {"key": "value", ...}
+        add_ctx = spec.get("additionalContext", {})
+        for k, v in add_ctx.items():
+            corpus.extend([k, str(v)])
+
+        # Perform case-insensitive substring test
+        joined = " ".join(corpus).lower()
+        if any(term in joined for term in search_terms):
+            matching_slxs.append(slx)
+
+    return matching_slxs

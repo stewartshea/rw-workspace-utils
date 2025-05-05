@@ -13,9 +13,11 @@ USE_DATE_TAG=${USE_DATE_TAG:-false} # Default is to not use date-based tags
 export DATE_TAG=${DATE_TAG:-$(date +%Y%m%d%H%M%S)} # Default date tag if enabled
 # Ensure Helm cache and repositories are correctly set
 
-export HELM_CACHE_HOME="./helm"
-export HELM_CONFIG_HOME="./helm/config"
-export HELM_DATA_HOME="./helm/data"
+BASE_DIR=$(pwd)                 # where the script starts
+export HELM_CACHE_HOME="$BASE_DIR/helm"
+export HELM_CONFIG_HOME="$BASE_DIR/helm/config"
+export HELM_DATA_HOME="$BASE_DIR/helm/data"
+
 
 
 # Registry-specific variables
