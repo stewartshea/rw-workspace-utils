@@ -21,7 +21,7 @@ Sync CodeCollection Images to ACR Registry `${REGISTRY_NAME}`
     ...    env=${env}
     ...    secret__DOCKER_USERNAME=${DOCKER_USERNAME}
     ...    secret__DOCKER_TOKEN=${DOCKER_TOKEN}
-    ...    timeout_seconds=300
+    ...    timeout_seconds=600
     ...    include_in_history=false
     ...    show_in_rwl_cheatsheet=false
 
@@ -36,7 +36,7 @@ Sync RunWhen Local Image Updates to ACR Registry`${REGISTRY_NAME}`
     ...    env=${env}
     ...    secret__DOCKER_USERNAME=${DOCKER_USERNAME}
     ...    secret__DOCKER_TOKEN=${DOCKER_TOKEN}
-    ...    timeout_seconds=300
+    ...    timeout_seconds=600
     ...    include_in_history=false
     ...    show_in_rwl_cheatsheet=false
 

@@ -2,13 +2,18 @@
 
 # set -euo pipefail
 
+: "${CODEBUNDLE_TEMP_DIR:?ERROR: CODEBUNDLE_TEMP_DIR is not set}"
+
+mkdir -p "$CODEBUNDLE_TEMP_DIR"          # no-op if it already exists
+
+
 # Base Variables
 HELM_REPO_URL=$1   # Helm repository URL
 HELM_REPO_NAME=$2  # Helm repository name
 HELM_CHART_NAME=$3 # Helm chart name
-OUTPUT_JSON="images_to_update.json"
-RENDERED_YAML="rendered_chart.yaml"
-REGISTRIES_TXT="registries.txt"
+OUTPUT_JSON="${CODEBUNDLE_TEMP_DIR}/images_to_update.json"
+RENDERED_YAML="${CODEBUNDLE_TEMP_DIR}/rendered_chart.yaml"
+REGISTRIES_TXT="${CODEBUNDLE_TEMP_DIR}/registries.txt"
 USE_DATE_TAG=${USE_DATE_TAG:-false} # Default is to not use date-based tags
 export DATE_TAG=${DATE_TAG:-$(date +%Y%m%d%H%M%S)} # Default date tag if enabled
 # Ensure Helm cache and repositories are correctly set
