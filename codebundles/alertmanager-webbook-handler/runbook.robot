@@ -1,7 +1,7 @@
 *** Settings ***
 Metadata          Author    stewartshea
 Documentation     This CodeBundle will inspect alertmanager webhook payload data (stored in the RunWhen Platform), parse the data for SLX hints, and add Tasks to the RunSession
-Metadata          Supports     AlertManager
+Metadata          Supports     AlertManager   Webhook
 Metadata          Display Name     AlertManager Webhook Handler
 Suite Setup       Suite Initialization
 Library           BuiltIn
