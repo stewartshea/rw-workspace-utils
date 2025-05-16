@@ -93,9 +93,16 @@ Start RunSession From Azure Monitor Webhook Details
         Log    Results: ${slx_list}
 
         # 4) launch run-requests for each matching SLX
-        FOR    ${slx}    IN    @{slx_list}
-            Log    ${slx["shortName"]} has matched
-            ${runrequest}=    RW.Workspace.Run Tasks for SLX
-            ...    slx=${slx["shortName"]}
+        #FOR    ${slx}    IN    @{slx_list}
+        #    Log    ${slx["shortName"]} has matched
+        #    ${runrequest}=    RW.Workspace.Run Tasks for SLX
+        #    ...    slx=${slx["shortName"]}
+        #END
+        IF  len(${slx_list}) > 0
+            FOR    ${slx}    IN    @{slx_list} 
+                RW.Core.Add To Report    ${slx["shortName"]} has matched
+                #${runrequest}=    RW.Workspace.Run Tasks for SLX
+                # ...    slx=${slx["shortName"]}
+            END
         END
     END

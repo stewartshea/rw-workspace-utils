@@ -44,9 +44,9 @@ Start RunSession From Dynatrace Webhook Details
         # 3) Add those SLXs to the RunSession
         IF  len(${slx_list}) > 0
             FOR    ${slx}    IN    @{slx_list} 
-                Log    ${slx["shortName"]} has matched
-                ${runrequest}=    RW.Workspace.Run Tasks for SLX
-                ...    slx=${slx["shortName"]}
+                RW.Core.Add To Report    ${slx["shortName"]} has matched
+                #${runrequest}=    RW.Workspace.Run Tasks for SLX
+                # ...    slx=${slx["shortName"]}
             END
         END
     END
