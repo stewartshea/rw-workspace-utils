@@ -2,6 +2,22 @@ import re, logging, json, jmespath, requests, os
 from datetime import datetime
 from robot.libraries.BuiltIn import BuiltIn
 from collections import Counter
+from collections import defaultdict
+from typing import Dict, List, Any
+
+from RW.Core import Core
+from RW import platform
+from RW.Workspace import import_platform_variable
+
+
+logger = logging.getLogger(__name__)
+
+ROBOT_LIBRARY_SCOPE = "GLOBAL"
+
+SHELL_HISTORY: list[str] = []
+SECRET_PREFIX = "secret__"
+SECRET_FILE_PREFIX = "secret_file__"
+
 
 def get_runsession_url(rw_runsession=None):
     """Return a direct link to the RunSession."""
@@ -206,3 +222,268 @@ def get_most_referenced_resource(data: str):
     most_common_resource = keyword_counter.most_common(1)
     
     return most_common_resource[0][0] if most_common_resource else "No keywords found"
+
+def create_runsession_from_task_search(
+    *,
+    search_response: dict,
+    persona_shortname: str = "",
+    source: str = "searchQuery",
+    score_threshold: float = 0.3,
+    runsession_prefix: str = "automated",
+    notes: str = "",
+    api_token: platform.Secret | None = None,
+    rw_api_url: str | None = None,
+    rw_workspace: str | None = None,
+    dry_run: bool = False,
+) -> dict | str:
+    """Create a RunSession from a task-search response."""
+
+    # ── 0. workspace / API root ────────────────────────────────────────────
+    try:
+        if rw_workspace is None:
+            rw_workspace = import_platform_variable("RW_WORKSPACE")
+        if rw_api_url is None:
+            rw_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError as e:
+        BuiltIn().log(f"[create_runsession] env var missing: {e}", level="WARN")
+        return {}
+
+    url = f"{rw_api_url.rstrip('/')}/{rw_workspace}/runsessions"
+
+    # ── 1. Convert tasks → runRequests ─────────────────────────────────────
+    tasks: List[dict] = search_response.get("tasks", [])
+    if not tasks:
+        BuiltIn().log("[create_runsession] search_response had no tasks", level="INFO")
+        return {}
+
+    new_struct = "workspaceTask" in tasks[0]
+    runreq_map: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {"slxName": None, "taskTitles": [], "fromSearchQuery": source}
+    )
+
+    for t in tasks:
+        if t.get("score", 0) < score_threshold:
+            continue
+
+        if new_struct:
+            ws    = t["workspaceTask"]
+            slx   = ws.get("slxShortName") or ws.get("slxName")
+            title = ws.get("unresolvedTitle") or ws.get("resolvedTitle")
+        else:
+            slx   = t.get("slxShortName") or t.get("slxName")
+            title = t.get("taskName")      or t.get("resolvedTaskName")
+
+        if not slx or not title:
+            continue
+        if not slx.startswith(f"{rw_workspace}--"):
+            slx = f"{rw_workspace}--{slx}"
+
+        rr = runreq_map[slx]
+        rr["slxName"] = slx
+        rr["taskTitles"].append(title)
+
+    run_requests = list(runreq_map.values())
+    if not run_requests:
+        BuiltIn().log("[create_runsession] no tasks above threshold", level="INFO")
+        return {}
+
+    # ── 2. Build payload (persona only at root) ────────────────────────────
+    body: dict = {
+        "generateName": runsession_prefix,
+        "runRequests":  run_requests,
+        "active": True,
+    }
+    if persona_shortname:
+        body["persona_name"] = f"{rw_workspace}--{persona_shortname}"
+    if notes:
+        body["notes"] = notes
+
+    if dry_run:
+        return body
+
+    # ── 3. Auth headers ────────────────────────────────────────────────────
+    sess = requests.Session()
+    if api_token:
+        sess.headers["Authorization"] = f"Bearer {api_token.value}"
+    elif os.getenv("RW_USER_TOKEN"):
+        sess.headers["Authorization"] = f"Bearer {os.environ['RW_USER_TOKEN']}"
+
+    # ── 4. POST ────────────────────────────────────────────────────────────
+    try:
+        resp = sess.post(url, json=body, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        BuiltIn().log(
+            f"[create_runsession] POST failed: "
+            f"{getattr(resp, 'status_code', '')} {getattr(resp, 'text', str(e))}",
+            level="WARN",
+        )
+        return {}
+
+def get_persona_details(
+    persona: str,
+) -> dict:
+    """
+    Get persona configuration details
+
+    :param persona: The personaShortName
+
+    :return: Parsed JSON response of the persona configuration.
+    """
+    try:
+        rw_workspace = import_platform_variable("RW_WORKSPACE")
+        rw_workspace_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError as e:
+        BuiltIn().log(f"Missing required platform variables: {e}", level="WARN")
+        return {}
+
+    url = f"{rw_workspace_api_url}/{rw_workspace}/personas/{persona}"
+
+    user_token = os.getenv("RW_USER_TOKEN")
+    if user_token:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {user_token}"
+        }
+        session = requests.Session()
+        session.headers.update(headers)
+    else:
+        session = platform.get_authenticated_session()
+
+
+    try:
+        response = session.get(url, timeout=10, verify=platform.REQUEST_VERIFY)
+        response.raise_for_status()
+        return response.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        BuiltIn().log(f"Persona fetch failed: {e}", level="WARN")
+        platform_logger.exception(e)
+        return {}
+
+def add_tasks_to_runsession_from_search(
+    search_response: dict,
+    runsession_id: str | None = None,          
+    api_token: platform.Secret = None,           
+    rw_api_url: str         = "https://papi.beta.runwhen.com/api/v3",
+    rw_workspace: str       = "my-workspace",
+    score_threshold: float  = 0.7,
+    source_query: str | None = None,
+    dry_run: bool           = False,
+):
+    """
+    Append tasks (score ≥ threshold) from *search_response* to an existing
+    RunSession <runsession_id>.
+
+    • Builds a JSON-Merge-Patch body:
+        {
+          "runRequests": [
+            { "slxName": "...", "fromSearchQuery": "...", "taskTitles": [...] },
+            …
+          ]
+        }
+    • Sends PATCH /workspaces/<ws>/runsessions/<id>
+      Content-Type: application/merge-patch+json
+
+    Returns:
+        • The server's JSON response (on success)  –or–
+        • The patch body (when dry_run=True).
+    """
+    # ── 0. Resolve env defaults ────────────────────────────────────────────
+    try:
+        if rw_workspace == "my-workspace":
+            rw_workspace = import_platform_variable("RW_WORKSPACE")
+        if rw_api_url == "https://papi.beta.runwhen.com/api/v3":
+            rw_api_url = import_platform_variable("RW_WORKSPACE_API_URL")
+        if runsession_id is None:
+            runsession_id = import_platform_variable("RW_SESSION_ID")
+    except ImportError as e:
+        BuiltIn().log(f"[patch_runsession] Missing env var: {e}", level="WARN")
+        return {}
+
+    # ── 1. Filter tasks by score ───────────────────────────────────────────
+    tasks = search_response.get("tasks", [])
+    if not tasks:
+        BuiltIn().log("[patch_runsession] No tasks in search_response", level="INFO")
+        return {}
+
+    new_struct = "workspaceTask" in tasks[0]
+    task_pairs: List[tuple[str, str]] = []
+
+    for t in tasks:
+        if t.get("score", 0) < score_threshold:
+            continue
+
+        if new_struct:
+            ws    = t["workspaceTask"]
+            slx   = ws.get("slxShortName") or ws.get("slxName")
+            title = ws.get("unresolvedTitle") or ws.get("resolvedTitle")
+        else:
+            slx   = t.get("slxShortName") or t.get("slxName")
+            title = t.get("taskName") or t.get("resolvedTaskName")
+
+        if not slx or not title:
+            continue
+
+        if not slx.startswith(f"{rw_workspace}--"):
+            slx = f"{rw_workspace}--{slx}"
+
+        task_pairs.append((slx, title))
+
+    if not task_pairs:
+        BuiltIn().log("[patch_runsession] No tasks met the score threshold", level="INFO")
+        return {}
+
+    # ── 2. Build merge-patch body ──────────────────────────────────────────
+    runreq_map: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {"slxName": None, "taskTitles": [], "fromSearchQuery": source_query}
+    )
+    for slx, title in task_pairs:
+        rr = runreq_map[slx]
+        rr["slxName"] = slx
+        rr["taskTitles"].append(title)
+
+    patch_body = {"runRequests": list(runreq_map.values())}
+
+    if dry_run:
+        return patch_body
+
+    # ── 3. PATCH the RunSession ──────────────────────────────────────────────
+    base = rw_api_url.rstrip("/")                #  ➜ “…/api/v3”  or “…/api/v3/workspaces”
+    if not base.endswith("/workspaces"):
+        base += "/workspaces" 
+    url = f"{base}/{rw_workspace}/runsessions/{runsession_id}"
+
+    # ── 3a. Choose auth method ------------------------------------------------
+    if api_token is not None:
+        # explicit platform.Secret
+        session = requests.Session()
+        session.headers.update({"Authorization": f"Bearer {api_token.value}"})
+        BuiltIn().log("[patch_runsession] using api_token parameter", level="INFO")
+
+    elif os.getenv("RW_USER_TOKEN"):
+        # local dev or ad-hoc run
+        session = requests.Session()
+        session.headers.update({"Authorization": f"Bearer {os.environ['RW_USER_TOKEN']}"})
+        BuiltIn().log("[patch_runsession] using RW_USER_TOKEN from env", level="INFO")
+
+    else:
+        # inside a runbook/runtime – session already carries auth headers
+        session = platform.get_authenticated_session()
+        BuiltIn().log("[patch_runsession] using platform authenticated session", level="INFO")
+
+    headers = {"Content-Type": "application/json"}
+
+    BuiltIn().log(
+        f"[patch_runsession] Patching RunSession {runsession_id} with "
+        f"{len(task_pairs)} tasks (score ≥ {score_threshold})",
+        level="INFO",
+    )
+
+    try:
+        resp = session.patch(url, json=patch_body, headers=headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        BuiltIn().log(f"[patch_runsession] PATCH failed: {e}", level="WARN")
+        return {}

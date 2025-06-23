@@ -11,19 +11,31 @@ Library           OperatingSystem
 Library           RW.CLI
 Library           RW.Azure
 Library           RW.Workspace
+Library           RW.RunSession
 Library           Collections
 Library           String
  
 *** Keywords ***
 Suite Initialization
+    ${DRY_RUN_MODE}=    RW.Core.Import User Variable    DRY_RUN_MODE
+    ...    description=Whether to capture the webhook details in dry-run mode, reporting what tasks will be run but not executing them. True or False  
+    ...    enum=[true,false]
+    ...    default=true
+    Set Suite Variable    ${DRY_RUN_MODE}    ${DRY_RUN_MODE}
+
     ${WEBHOOK_DATA}=     RW.Workspace.Import Memo Variable    
     ...    key=webhookJson
     ${WEBHOOK_JSON}=    Evaluate    json.loads(r'''${WEBHOOK_DATA}''')    json
     Set Suite Variable    ${WEBHOOK_JSON}    ${WEBHOOK_JSON}
+
     # # Local test data
     # ${WEBHOOK_DATA}=     RW.Core.Import User Variable    WEBHOOK_DATA
     # ${WEBHOOK_JSON}=    Evaluate    json.loads(r'''${WEBHOOK_DATA}''')    json
     # Set Suite Variable    ${WEBHOOK_JSON}
+
+    ${CURRENT_SESSION}=      RW.Workspace.Import Runsession Details
+    ${CURRENT_SESSION_JSON}=    Evaluate    json.loads(r'''${CURRENT_SESSION}''')    json
+    Set Suite Variable    ${CURRENT_SESSION_JSON}
 
 *** Tasks ***
 Start RunSession From Azure Monitor Webhook Details
@@ -32,27 +44,27 @@ Start RunSession From Azure Monitor Webhook Details
 
     RW.Core.Add Pre To Report    Full payload:\n ${WEBHOOK_JSON["data"]}
 
-    # ${essentials}=    Set Variable    ${WEBHOOK_JSON["data"]["essentials"]}
+    ${essentials}=    Set Variable    ${WEBHOOK_JSON["data"]["essentials"]}
 
-    # ${severity}=         Set Variable    ${essentials["severity"]}
-    # ${alert_rule}=       Set Variable    ${essentials["alertRule"]}
-    # ${description}=      Set Variable    ${essentials["description"]}
-    # ${monitor_condition}=    Set Variable    ${essentials["monitorCondition"]}
+    ${severity}=         Set Variable    ${essentials["severity"]}
+    ${alert_rule}=       Set Variable    ${essentials["alertRule"]}
+    ${description}=      Set Variable    ${essentials["description"]}
+    ${monitor_condition}=    Set Variable    ${essentials["monitorCondition"]}
 
-    # ${target_ids}=    Set Variable    ${essentials["alertTargetIDs"]}
-    # ${target_id}=     Set Variable    ${target_ids[0]}
-    # ${parts}=            Split String    ${target_id}    /
-    # ${subscription_id}=  Set Variable    ${parts[2]}
-    # ${resource_group}=   Set Variable    ${parts[4]}
-    # ${resource_name}=    Set Variable    ${parts[-1]}
+    ${target_ids}=    Set Variable    ${essentials["alertTargetIDs"]}
+    ${target_id}=     Set Variable    ${target_ids[0]}
+    ${parts}=            Split String    ${target_id}    /
+    ${subscription_id}=  Set Variable    ${parts[2]}
+    ${resource_group}=   Set Variable    ${parts[4]}
+    ${resource_name}=    Set Variable    ${parts[-1]}
 
-    # Log To Console    SEVERITY: ${severity}
-    # Log To Console    RULE: ${alert_rule}
-    # Log To Console    DESC: ${description}
-    # Log To Console    MONITOR CONDITION: ${monitor_condition}
-    # Log To Console    SUBSCRIPTION ID: ${subscription_id}
-    # Log To Console    RESOURCE GROUP: ${resource_group}
-    # Log To Console    RESOURCE NAME: ${resource_name}
+    RW.Core.Add Pre To Report    SEVERITY: ${severity}
+    RW.Core.Add Pre To Report    RULE: ${alert_rule}
+    RW.Core.Add Pre To Report    DESC: ${description}
+    RW.Core.Add Pre To Report    MONITOR CONDITION: ${monitor_condition}
+    RW.Core.Add Pre To Report    SUBSCRIPTION ID: ${subscription_id}
+    RW.Core.Add Pre To Report    RESOURCE GROUP: ${resource_group}
+    RW.Core.Add Pre To Report    RESOURCE NAME: ${resource_name}
 
 
     ${parsed_data}=    RW.Azure.Parse Alert    ${WEBHOOK_JSON}
@@ -91,18 +103,88 @@ Start RunSession From Azure Monitor Webhook Details
         # 3) find SLXs that reference any of those names
         ${slx_list}=    RW.Workspace.Get Slxs With Entity Reference    ${resource_names}
         Log    Results: ${slx_list}
+        IF    len(${slx_list}) == 0
+            RW.Core.Add To Report    No SLX matched impacted entities – stopping handler.
+        ELSE
+            ${slx_scopes}=    Create List
+            FOR    ${slx}    IN    @{slx_list}
+                Append To List    ${slx_scopes}    ${slx["shortName"]}
+            END
+            ${qry}=    Set Variable    ${slx_scopes[0]} Health
 
-        # 4) launch run-requests for each matching SLX
-        #FOR    ${slx}    IN    @{slx_list}
-        #    Log    ${slx["shortName"]} has matched
-        #    ${runrequest}=    RW.Workspace.Run Tasks for SLX
-        #    ...    slx=${slx["shortName"]}
-        #END
-        IF  len(${slx_list}) > 0
-            FOR    ${slx}    IN    @{slx_list} 
-                RW.Core.Add To Report    ${slx["shortName"]} has matched
-                #${runrequest}=    RW.Workspace.Run Tasks for SLX
-                # ...    slx=${slx["shortName"]}
+            # Get persona / confidence threshold
+            ${persona}=    RW.RunSession.Get Persona Details
+            ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+            ${run_confidence}=    Set Variable    ${persona["spec"]["run"]["confidenceThreshold"]}
+
+            # A scope of a single SLX tends to present search issues. Add all SLXs from the same group if we only have one SLX.
+            IF    len(@{slx_scopes}) == 1
+                ${config}=    RW.Workspace.Get Workspace Config
+
+                ${nearby_slxs}=    RW.Workspace.Get Nearby Slxs
+                ...    workspace_config=${config}
+                ...    slx_name=${slx_scopes[0]}
+                @{nearby_slx_list}    Convert To List    ${nearby_slxs}
+                FOR    ${slx}    IN    @{nearby_slx_list}
+                    Append To List    ${slx_scopes}    ${slx}
+                END
+                Add Pre To Report    Expanding scope to include the following SLXs: ${slx_scopes}
+            END
+
+            #  Admin-level discovery (report only)
+            # ${admin_search}=    RW.Workspace.Perform Task Search
+            # ...                query=${qry}
+            # ...                slx_scope=${slx_scopes}
+            # ${admin_tasks_md}    ${admin_tasks_total}=       RW.Workspace.Build Task Report Md
+            # ...    search_response=${admin_search}
+            # ...    score_threshold=0
+
+            # Persona-restricted discovery
+            ${persona_search}=    RW.Workspace.Perform Task Search With Persona
+            ...                    query=${qry}
+            ...                    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+            ...                    slx_scope=${slx_scopes}
+            ${tasks_md}    ${total_persona_tasks}=          RW.Workspace.Build Task Report Md
+            ...                    search_response=${persona_search}
+            # ...                    score_threshold=${run_confidence}
+            ...                    score_threshold=0
+
+            RW.Core.Add To Report    \# Tasks meeting confidence ≥${run_confidence}
+            RW.Core.Add Pre To Report    ${tasks_md}
+
+            IF    ${total_persona_tasks} == 0
+                RW.Core.Add To Report    No tasks cleared confidence threshold – cannot create RunSession.
+            ELSE
+                IF    '${DRY_RUN_MODE}' == 'false'
+                    RW.Core.Add To Report    Dry-run disabled – creating Runsession …
+                    ${runsession}=    RW.RunSession.Create RunSession from Task Search
+                    ...    search_response=${persona_search}
+                    ...    persona_shortname=${CURRENT_SESSION_JSON["personaShortName"]}
+                    # ...    score_threshold=${run_confidence}
+                    ...     score_threshold=0
+                    ...    runsession_prefix=Azure-Monitor-Alert-${alert_rule}
+                    ...    notes=${CURRENT_SESSION_JSON["notes"]}
+                    ...    source=${CURRENT_SESSION_JSON["source"]}
+                    IF    $runsession != {}
+                        ${runsession_url}=     RW.RunSession.Get RunSession Url
+                        ...    rw_runsession=${runsession["id"]}         
+                        RW.Core.Add To Report    Started runsession [${runsession["id"]}](${runsession_url})
+                    ELSE
+                        RW.Core.Add To Report    RunSession did not create successfully.
+                        RW.Core.Add Issue
+                        ...    severity=2
+                        ...    expected=RunSession should be created successfully
+                        ...    actual=RunSession was not created properly
+                        ...    title=Could create RunSession from `${CURRENT_SESSION_JSON["source"]}`
+                        ...    reproduce_hint=Try to create new RunSession
+                        ...    details=See debug logs or backend response body.
+                        ...    next_steps=Inspect runrequest logs or contact RunWhen support.
+                    END
+                ELSE
+                    RW.Core.Add To Report    Dry-run mode active – no RunSession created.
+                END
             END
         END
+    ELSE
+        RW.Core.Add To Report    Problem state '${WEBHOOK_JSON["state"]}' – handler only processes OPEN events.
     END
