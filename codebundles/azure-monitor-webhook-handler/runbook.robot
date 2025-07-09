@@ -186,5 +186,5 @@ Start RunSession From Azure Monitor Webhook Details
             END
         END
     ELSE
-        RW.Core.Add To Report    Problem state '${WEBHOOK_JSON["state"]}' – handler only processes OPEN events.
+        RW.Core.Add To Report    Problem state '${monitor_condition}' – handler only processes Fired events.
     END
