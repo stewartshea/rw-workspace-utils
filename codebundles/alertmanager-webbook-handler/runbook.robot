@@ -56,40 +56,73 @@ Add Tasks to RunSession from AlertManager Webhook Details
         ...    tag_list=${common_labels_list}
         
         IF  len(${slx_list}) == 0
-
             RW.Core.Add To Report    Could not match commonLabels to any SLX tags. Cannot continue with RunSession.
         ELSE
-
             RW.Core.Add To Report    Found SLX matches..continuing on with search. 
             ${slx_scopes}=    Create List
             FOR    ${slx}    IN    @{slx_list}
                 Append To List    ${slx_scopes}    ${slx["shortName"]}
             END
-            ${qry}=    Set Variable    ${slx_scopes[0]} Health
 
             # Get persona / confidence threshold
             ${persona}=    RW.RunSession.Get Persona Details
             ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
             ${run_confidence}=    Set Variable    ${persona["spec"]["run"]["confidenceThreshold"]}
 
+            # Extract entity data from commonLabels for improved search
+            ${entity_data}=    Create List
+            FOR    ${key}    ${value}    IN    &{WEBHOOK_JSON["commonLabels"]}
+                Append To List    ${entity_data}    ${value}
+            END
+
+            # Ensure entity_data is not empty to prevent search issues
+            IF    len(${entity_data}) == 0
+                RW.Core.Add To Report    Warning: No entity data extracted from commonLabels, using fallback search
+                ${entity_data}=    Create List    health
+            END
+
+            # Use improved search strategy
+            ${persona_search}    ${search_strategy}    ${final_slx_scopes}    ${search_query}=    RW.Workspace.Perform Improved Task Search
+            ...    entity_data=${entity_data}
+            ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+            ...    confidence_threshold=${run_confidence}
+            ...    slx_scope=${slx_scopes}
+
+            RW.Core.Add To Report    Search strategy used: ${search_strategy}
+            RW.Core.Add To Report    Search query used: ${search_query}
+            RW.Core.Add To Report    SLX scopes used: ${final_slx_scopes}
+
             # A scope of a single SLX tends to present search issues. Add all SLXs from the same group if we only have one SLX.
-            IF    len(@{slx_scopes}) == 1
+            ${scope_expanded}=    Set Variable    False
+            ${expanded_slx_scopes}=    Set Variable    ${final_slx_scopes}
+            IF    len(${final_slx_scopes}) == 1
                 ${config}=    RW.Workspace.Get Workspace Config
 
                 ${nearby_slxs}=    RW.Workspace.Get Nearby Slxs
                 ...    workspace_config=${config}
-                ...    slx_name=${slx_scopes[0]}
+                ...    slx_name=${final_slx_scopes[0]}
                 @{nearby_slx_list}    Convert To List    ${nearby_slxs}
                 FOR    ${slx}    IN    @{nearby_slx_list}
-                    Append To List    ${slx_scopes}    ${slx}
+                    Append To List    ${expanded_slx_scopes}    ${slx}
                 END
-                Add Pre To Report    Expanding scope to include the following SLXs: ${slx_scopes}
+                Add Pre To Report    Expanding scope to include the following SLXs: ${expanded_slx_scopes}
+                ${scope_expanded}=    Set Variable    True
+            END
+
+            # If scope was expanded, perform a new search with the expanded scope
+            IF    ${scope_expanded}
+                ${persona_search}    ${search_strategy}    ${final_slx_scopes}    ${search_query}=    RW.Workspace.Perform Improved Task Search
+                ...    entity_data=${entity_data}
+                ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+                ...    confidence_threshold=${run_confidence}
+                ...    slx_scope=${expanded_slx_scopes}
+                RW.Core.Add To Report    Re-searched with expanded scope: ${expanded_slx_scopes}
             END
 
             # Perform search with Admin permissions - These tasks will never be run
             ${admin_search}=    RW.Workspace.Perform Task Search
-            ...    query=${qry}
-            ...    slx_scope=${slx_scopes}
+            ...    query=health
+            ...    slx_scope=${final_slx_scopes}
 
             ${admin_tasks_md}    ${admin_tasks_total}=    RW.Workspace.Build Task Report Md 
             ...    search_response=${admin_search}
@@ -97,12 +130,6 @@ Add Tasks to RunSession from AlertManager Webhook Details
             RW.Core.Add To Report    \# Tasks found with Admin permissions (these will NOT be run)
             RW.Core.Add Pre To Report    ${admin_tasks_md}
 
-
-            # Perform search with Persona that is attached to the RunSession
-            ${persona_search}=    RW.Workspace.Perform Task Search With Persona
-            ...    query=${qry}
-            ...    slx_scope=${slx_scopes}
-            ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
             RW.Core.Add To Report    \# Tasks found with Engineering Assistant permissions (${CURRENT_SESSION_JSON["personaShortName"]})
 
             ${tasks_md}    ${total_persona_tasks}=    RW.Workspace.Build Task Report Md 

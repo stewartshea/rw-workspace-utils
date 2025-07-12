@@ -666,3 +666,124 @@ def build_task_report_md(
     lines.append("")  # trailing newline
     md = "\n".join(lines)
     return md, total_tasks
+
+
+def perform_improved_task_search(
+    entity_data: List[str],
+    persona: str,
+    confidence_threshold: float = 0.7,
+    slx_scope: Optional[List[str]] = None,
+) -> Tuple[Dict, str, List[str], str]:
+    """
+    Perform an improved three-tier search strategy for webhook handlers:
+    
+    1. Try search with extracted entity data
+    2. If no high-quality results, search with SLX spec.tag "resource_name" 
+    3. If still no results, search with "child_resource" tag names
+    
+    Args:
+        entity_data: List of entity names/identifiers extracted from webhook
+        persona: Persona to use for search
+        confidence_threshold: Minimum confidence score for high-quality results
+        slx_scope: Optional SLX scope to limit search
+        
+    Returns:
+        Tuple of (search_response, search_strategy_used, slx_scopes_used, search_query_used)
+    """
+    try:
+        ws = import_platform_variable("RW_WORKSPACE")
+        root = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError:
+        return {}, "failed", [], ""
+
+    if "--" not in persona:
+        persona = f"{ws}--{persona}"
+
+    # Strategy 1: Search with extracted entity data
+    if entity_data:
+        entity_query = " ".join(entity_data) + " health"
+        BuiltIn().log(f"[improved_search] Strategy 1: Searching with entity data: {entity_query}", level="INFO")
+        
+        search_response = perform_task_search_with_persona(
+            query=entity_query,
+            persona=persona,
+            slx_scope=slx_scope
+        )
+        
+        # Check if we have high-quality results
+        high_quality_tasks = [
+            t for t in search_response.get("tasks", [])
+            if t.get("score", 0) >= confidence_threshold
+        ]
+        
+        if high_quality_tasks:
+            BuiltIn().log(f"[improved_search] Strategy 1 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
+            return search_response, "entity_data", slx_scope or [], entity_query
+
+    # Strategy 2: Search with SLX spec.tag "resource_name"
+    BuiltIn().log("[improved_search] Strategy 2: Searching with resource_name tags", level="INFO")
+    
+    # Get SLXs with resource_name tags
+    resource_name_tags = [{"name": "resource_name", "value": entity} for entity in entity_data]
+    slx_list = get_slxs_with_tag(resource_name_tags)
+    
+    if slx_list:
+        resource_slx_scopes = [slx["shortName"] for slx in slx_list]
+        # Combine with existing scope if provided
+        combined_scope = list(set((slx_scope or []) + resource_slx_scopes))
+        
+        # Try search with resource_name SLXs
+        search_response = perform_task_search_with_persona(
+            query="health",
+            persona=persona,
+            slx_scope=combined_scope
+        )
+        
+        high_quality_tasks = [
+            t for t in search_response.get("tasks", [])
+            if t.get("score", 0) >= confidence_threshold
+        ]
+        
+        if high_quality_tasks:
+            BuiltIn().log(f"[improved_search] Strategy 2 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
+            return search_response, "resource_name_tags", combined_scope, "health"
+
+    # Strategy 3: Search with "child_resource" tag names
+    BuiltIn().log("[improved_search] Strategy 3: Searching with child_resource tags", level="INFO")
+    
+    # Get SLXs with child_resource tags
+    child_resource_tags = [{"name": "child_resource", "value": entity} for entity in entity_data]
+    slx_list = get_slxs_with_tag(child_resource_tags)
+    
+    if slx_list:
+        child_slx_scopes = [slx["shortName"] for slx in slx_list]
+        # Combine with existing scope if provided
+        combined_scope = list(set((slx_scope or []) + child_slx_scopes))
+        
+        # Try search with child_resource SLXs
+        search_response = perform_task_search_with_persona(
+            query="health",
+            persona=persona,
+            slx_scope=combined_scope
+        )
+        
+        high_quality_tasks = [
+            t for t in search_response.get("tasks", [])
+            if t.get("score", 0) >= confidence_threshold
+        ]
+        
+        if high_quality_tasks:
+            BuiltIn().log(f"[improved_search] Strategy 3 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
+            return search_response, "child_resource_tags", combined_scope, "health"
+
+    # If all strategies fail, perform a fallback search
+    BuiltIn().log("[improved_search] All strategies failed to find high-quality results, performing fallback search", level="WARN")
+    
+    # Always perform fallback search when no high-quality results found
+    search_response = perform_task_search_with_persona(
+        query="health",
+        persona=persona,
+        slx_scope=slx_scope
+    )
+    
+    return search_response, "fallback", slx_scope or [], "health"

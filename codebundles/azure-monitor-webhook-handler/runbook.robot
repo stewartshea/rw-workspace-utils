@@ -23,12 +23,11 @@ Suite Initialization
     ...    default=true
     Set Suite Variable    ${DRY_RUN_MODE}    ${DRY_RUN_MODE}
 
-    ${WEBHOOK_DATA}=     RW.Workspace.Import Memo Variable    
-    ...    key=webhookJson
+    ${WEBHOOK_DATA}=     RW.Workspace.Import Memo Variable    key=webhookJson
     ${WEBHOOK_JSON}=    Evaluate    json.loads(r'''${WEBHOOK_DATA}''')    json
     Set Suite Variable    ${WEBHOOK_JSON}    ${WEBHOOK_JSON}
 
-    # # Local test data
+    # Local test data
     # ${WEBHOOK_DATA}=     RW.Core.Import User Variable    WEBHOOK_DATA
     # ${WEBHOOK_JSON}=    Evaluate    json.loads(r'''${WEBHOOK_DATA}''')    json
     # Set Suite Variable    ${WEBHOOK_JSON}
@@ -100,6 +99,12 @@ Start RunSession From Azure Monitor Webhook Details
         END
         Log To Console    Resource names: ${resource_names}
 
+        # Ensure resource_names is not empty to prevent search issues
+        IF    len(${resource_names}) == 0
+            RW.Core.Add To Report    Warning: No resource names extracted from webhook, using fallback search
+            ${resource_names}=    Create List    health
+        END
+
         # 3) find SLXs that reference any of those names
         ${slx_list}=    RW.Workspace.Get Slxs With Entity Reference    ${resource_names}
         Log    Results: ${slx_list}
@@ -110,25 +115,48 @@ Start RunSession From Azure Monitor Webhook Details
             FOR    ${slx}    IN    @{slx_list}
                 Append To List    ${slx_scopes}    ${slx["shortName"]}
             END
-            ${qry}=    Set Variable    ${slx_scopes[0]} Health
 
             # Get persona / confidence threshold
             ${persona}=    RW.RunSession.Get Persona Details
             ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
             ${run_confidence}=    Set Variable    ${persona["spec"]["run"]["confidenceThreshold"]}
 
+            # Use improved search strategy
+            ${persona_search}    ${search_strategy}    ${final_slx_scopes}    ${search_query}=    RW.Workspace.Perform Improved Task Search
+            ...    entity_data=${resource_names}
+            ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+            ...    confidence_threshold=${run_confidence}
+            ...    slx_scope=${slx_scopes}
+
+            RW.Core.Add To Report    Search strategy used: ${search_strategy}
+            RW.Core.Add To Report    Search query used: ${search_query}
+            RW.Core.Add To Report    SLX scopes used: ${final_slx_scopes}
+
             # A scope of a single SLX tends to present search issues. Add all SLXs from the same group if we only have one SLX.
-            IF    len(@{slx_scopes}) == 1
+            ${scope_expanded}=    Set Variable    False
+            ${expanded_slx_scopes}=    Set Variable    ${final_slx_scopes}
+            IF    len(${final_slx_scopes}) == 1
                 ${config}=    RW.Workspace.Get Workspace Config
 
                 ${nearby_slxs}=    RW.Workspace.Get Nearby Slxs
                 ...    workspace_config=${config}
-                ...    slx_name=${slx_scopes[0]}
+                ...    slx_name=${final_slx_scopes[0]}
                 @{nearby_slx_list}    Convert To List    ${nearby_slxs}
                 FOR    ${slx}    IN    @{nearby_slx_list}
-                    Append To List    ${slx_scopes}    ${slx}
+                    Append To List    ${expanded_slx_scopes}    ${slx}
                 END
-                Add Pre To Report    Expanding scope to include the following SLXs: ${slx_scopes}
+                Add Pre To Report    Expanding scope to include the following SLXs: ${expanded_slx_scopes}
+                ${scope_expanded}=    Set Variable    True
+            END
+
+            # If scope was expanded, perform a new search with the expanded scope
+            IF    ${scope_expanded}
+                ${persona_search}    ${search_strategy}    ${final_slx_scopes}    ${search_query}=    RW.Workspace.Perform Improved Task Search
+                ...    entity_data=${resource_names}
+                ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
+                ...    confidence_threshold=${run_confidence}
+                ...    slx_scope=${expanded_slx_scopes}
+                RW.Core.Add To Report    Re-searched with expanded scope: ${expanded_slx_scopes}
             END
 
             #  Admin-level discovery (report only)
@@ -139,17 +167,12 @@ Start RunSession From Azure Monitor Webhook Details
             # ...    search_response=${admin_search}
             # ...    score_threshold=0
 
-            # Persona-restricted discovery
-            ${persona_search}=    RW.Workspace.Perform Task Search With Persona
-            ...                    query=${qry}
-            ...                    persona=${CURRENT_SESSION_JSON["personaShortName"]}
-            ...                    slx_scope=${slx_scopes}
+            RW.Core.Add To Report    \# Tasks meeting confidence ≥${run_confidence}
             ${tasks_md}    ${total_persona_tasks}=          RW.Workspace.Build Task Report Md
             ...                    search_response=${persona_search}
             # ...                    score_threshold=${run_confidence}
             ...                    score_threshold=0
 
-            RW.Core.Add To Report    \# Tasks meeting confidence ≥${run_confidence}
             RW.Core.Add Pre To Report    ${tasks_md}
 
             IF    ${total_persona_tasks} == 0
