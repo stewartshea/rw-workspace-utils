@@ -68,11 +68,31 @@ def _page_through_slxs(start_url: str, session: requests.Session) -> List[Dict]:
     """Internal: generic paginator compatible with both `next` and `page` meta."""
     url = start_url
     collected: List[Dict] = []
+    max_retries = 3
 
     while url:
-        resp = session.get(url, timeout=10)
-        resp.raise_for_status()
-        body = resp.json()
+        retry_delay = 2  # Reset retry_delay for each new URL
+        for attempt in range(max_retries):
+            try:
+                resp = session.get(url, timeout=30)  # Increased timeout from 10 to 30 seconds
+                resp.raise_for_status()
+                body = resp.json()
+                break
+            except requests.Timeout:
+                if attempt < max_retries - 1:
+                    warning_log(f"Timeout on attempt {attempt + 1}, retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    warning_log("Max retries reached, giving up on paging SLXs")
+                    return collected
+            except (requests.RequestException, json.JSONDecodeError) as e:
+                warning_log(f"Request failed on attempt {attempt + 1}: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise
 
         collected.extend(body.get("results", []))
 
@@ -210,7 +230,7 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
 
     rb_url = f"{root}/{ws}/slxs/{slx}/runbook"
     try:
-        rb = sess.get(rb_url, timeout=10)
+        rb = sess.get(rb_url, timeout=30)  # Increased timeout from 10 to 30 seconds
         rb.raise_for_status()
         tasks = rb.json().get("status", {}).get("codeBundle", {}).get("tasks", [])
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -225,7 +245,7 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
     }
     rs_url = f"{root}/{ws}/runsessions/{runsess}"
     try:
-        rsp = sess.patch(rs_url, json=patch_body, timeout=10)
+        rsp = sess.patch(rs_url, json=patch_body, timeout=30)  # Increased timeout from 10 to 30 seconds
         rsp.raise_for_status()
         return rsp.json()
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -271,7 +291,7 @@ def import_runsession_details(runsession_id: Optional[str] = None) -> Optional[s
         sess = platform.get_authenticated_session()
 
     try:
-        rsp = sess.get(url, timeout=10, verify=platform.REQUEST_VERIFY)
+        rsp = sess.get(url, timeout=30, verify=platform.REQUEST_VERIFY)
         rsp.raise_for_status()
         return json.dumps(rsp.json())
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -298,7 +318,7 @@ def import_memo_variable(key: str) -> Optional[str]:
     sess = platform.get_authenticated_session()
 
     try:
-        rsp = sess.get(url, timeout=10, verify=platform.REQUEST_VERIFY)
+        rsp = sess.get(url, timeout=30, verify=platform.REQUEST_VERIFY)
         rsp.raise_for_status()
         for rr in rsp.json().get("runRequests", []):
             if str(rr.get("id")) == runreq:
@@ -420,7 +440,7 @@ def get_workspace_config() -> list | dict:
 
     # ── 2. Fetch & return the file ─────────────────────────────────────────
     try:
-        resp = sess.get(url, timeout=10)
+        resp = sess.get(url, timeout=30)  # Increased timeout from 10 to 30 seconds
         resp.raise_for_status()
         # API shape: { "asJson": { …workspace.yaml parsed… } }
         return resp.json().get("asJson", [])
@@ -473,7 +493,7 @@ def get_workspace_slxs(
     total = None
 
     while url:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=30) # Increased timeout from 10 to 30 seconds
         resp.raise_for_status()
         p = resp.json()
         total = p.get("count", len(all_results))
@@ -494,7 +514,7 @@ def get_workspace_slxs(
 # ===========================================================================
 
 def _post_json(session: requests.Session, url: str, payload: dict) -> dict:
-    resp = session.post(url, json=payload, timeout=10, verify=platform.REQUEST_VERIFY)
+    resp = session.post(url, json=payload, timeout=30, verify=platform.REQUEST_VERIFY) # Increased timeout from 10 to 30 seconds
 
     if resp.status_code >= 400:
         curl_cmd = _as_curl(
@@ -502,7 +522,7 @@ def _post_json(session: requests.Session, url: str, payload: dict) -> dict:
             url,
             session,
             json_body=payload,
-            timeout=10,
+            timeout=30,
             verify=platform.REQUEST_VERIFY,
         )
         warning_log(

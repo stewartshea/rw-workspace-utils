@@ -42,7 +42,7 @@ def get_user_email(
     url = f"https://api.pagerduty.com/users/{userid}"
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=30)  # Increased timeout from 10 to 30 seconds
         if response.status_code == 200:
             user_data = response.json()
             email = user_data.get('user', {}).get('email')
@@ -98,7 +98,7 @@ def add_runsession_note_to_incident(
     url = f"https://api.pagerduty.com/incidents/{incidentid}/notes"
 
     try:
-        response = requests.post(url, json=note, headers=headers, timeout=10)
+        response = requests.post(url, json=note, headers=headers, timeout=30)  # Increased timeout from 10 to 30 seconds
         if response.status_code == 200:
             return response
     except requests.exceptions.RequestException as e:

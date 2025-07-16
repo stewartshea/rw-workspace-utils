@@ -42,7 +42,7 @@ class Slack:
             payload["text"] = text
 
         try:
-            response = requests.post(webhook_url.value, json=payload, timeout=10)
+            response = requests.post(webhook_url.value, json=payload, timeout=30)  # Increased timeout from 10 to 30 seconds
             if response.status_code != 200:
                 raise AssertionError(
                     f"Error sending Slack message: {response.status_code} - {response.text}"

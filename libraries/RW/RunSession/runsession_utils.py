@@ -310,7 +310,7 @@ def create_runsession_from_task_search(
 
     # ── 4. POST ────────────────────────────────────────────────────────────
     try:
-        resp = sess.post(url, json=body, timeout=10)
+        resp = sess.post(url, json=body, timeout=30)  # Increased timeout from 10 to 30 seconds
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as e:
@@ -353,7 +353,7 @@ def get_persona_details(
 
 
     try:
-        response = session.get(url, timeout=10, verify=platform.REQUEST_VERIFY)
+        response = session.get(url, timeout=30, verify=platform.REQUEST_VERIFY)  # Increased timeout from 10 to 30 seconds
         response.raise_for_status()
         return response.json()
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -481,7 +481,7 @@ def add_tasks_to_runsession_from_search(
     )
 
     try:
-        resp = session.patch(url, json=patch_body, headers=headers, timeout=10)
+        resp = session.patch(url, json=patch_body, headers=headers, timeout=30)  # Increased timeout from 10 to 30 seconds
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as e:
