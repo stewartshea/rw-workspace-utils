@@ -16,6 +16,7 @@ import requests
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
 from robot.libraries.BuiltIn import BuiltIn
+from robot.api.deco import keyword
 
 from RW import platform                      
 from RW.Core import Core                     
@@ -143,8 +144,22 @@ def get_slxs_with_tag(tag_list: List[Any]) -> List[Dict]:
     if not wanted:
         return []
 
-    sess = platform.get_authenticated_session()
-    start_url = f"{root}/{ws}/slxs?limit=500"
+    token = os.getenv("RW_USER_TOKEN")
+    if token:
+        sess = requests.Session()
+        sess.headers.update({
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        })
+    else:
+        sess = platform.get_authenticated_session()
+
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    start_url = f"{root}/{workspace_path}/slxs?limit=500"
     try:
         all_slxs = _page_through_slxs(start_url, sess)
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -164,10 +179,14 @@ def get_slxs_with_tag(tag_list: List[Any]) -> List[Dict]:
     return matches
 
 
+@keyword("Get Slxs With Entity Reference")
 def get_slxs_with_entity_reference(entity_refs: List[str]) -> List[Dict]:
     """
-    Return all SLXs that reference (alias, tag, configProvided, additionalContext)
-    any identifier in *entity_refs* (case-insensitive substring match).
+    Return SLXs that reference entities in *entity_refs* using a tiered matching strategy:
+    1. First try to match specific tag types (resource_name, child_resource)
+    2. Then try broader matches but limit scope to prevent API overload
+    
+    This function prioritizes precision over recall to keep search scopes manageable.
     """
     try:
         ws = import_platform_variable("RW_WORKSPACE")
@@ -185,7 +204,12 @@ def get_slxs_with_entity_reference(entity_refs: List[str]) -> List[Dict]:
     else:
         sess = platform.get_authenticated_session()
 
-    start_url = f"{root}/{ws}/slxs?limit=500"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    start_url = f"{root}/{workspace_path}/slxs?limit=500"
     try:
         all_slxs = _page_through_slxs(start_url, sess)
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -193,27 +217,126 @@ def get_slxs_with_entity_reference(entity_refs: List[str]) -> List[Dict]:
         return []
 
     terms = {t.lower() for t in entity_refs if isinstance(t, str) and t}
-    hits: List[Dict] = []
+    if not terms:
+        return []
 
+    # Tier 1: High-priority matches (specific tag types)
+    priority_hits: List[Dict] = []
+    priority_tag_names = {"resource_name", "child_resource", "entity_name", "target_resource"}
+    
     for slx in all_slxs:
+        spec = slx.get("spec", {})
+        tags = spec.get("tags", [])
+        
+        # Check for priority tag matches
+        for tag in tags:
+            tag_name = tag.get("name", "").lower()
+            tag_value = tag.get("value", "").lower()
+            
+            if tag_name in priority_tag_names and any(term in tag_value for term in terms):
+                priority_hits.append(slx)
+                break
+    
+    # If we found priority matches, return them (limit to prevent scope explosion)
+    if priority_hits:
+        BuiltIn().log(f"Found {len(priority_hits)} SLXs with priority tag matches", level="INFO")
+        return priority_hits[:50]  # Limit to 50 to prevent scope explosion
+    
+    # Tier 2: Broader matches but with strict limits
+    broader_hits: List[Dict] = []
+    max_broader_matches = 20  # Strict limit to prevent API overload
+    
+    for slx in all_slxs:
+        if len(broader_hits) >= max_broader_matches:
+            break
+            
         spec = slx.get("spec", {})
         corpus = [spec.get("alias", "")]
 
+        # Only check tags, skip configProvided and additionalContext for broader search
         for t in spec.get("tags", []):
             n, v = t.get("name", ""), t.get("value", "")
             corpus.extend([n, v, f"{n}:{v}"])
 
-        for cp in spec.get("configProvided", []):
-            n, v = cp.get("name", ""), cp.get("value", "")
-            corpus.extend([n, v, f"{n}:{v}"])
-
-        for k, v in spec.get("additionalContext", {}).items():
-            corpus.extend([k, str(v), f"{k}:{v}"])
-
         joined = " ".join(corpus).lower()
         if any(term in joined for term in terms):
-            hits.append(slx)
+            broader_hits.append(slx)
+    
+    if broader_hits:
+        BuiltIn().log(f"Found {len(broader_hits)} SLXs with broader matches (limited to {max_broader_matches})", level="INFO")
+        return broader_hits
+    
+    # No matches found
+    BuiltIn().log("No SLXs found matching entity references", level="INFO")
+    return []
 
+
+@keyword("Get Slxs With Targeted Entity Reference")
+def get_slxs_with_targeted_entity_reference(entity_refs: List[str], tag_types: List[str] = None) -> List[Dict]:
+    """
+    Return SLXs that reference entities in *entity_refs* using specific tag types.
+    
+    Args:
+        entity_refs: List of entity names/identifiers to search for
+        tag_types: List of specific tag names to match against (e.g., ["resource_name", "child_resource"])
+                   If None, defaults to ["resource_name", "child_resource", "entity_name"]
+    
+    Returns:
+        List of SLXs that have matching tags of the specified types
+    """
+    if tag_types is None:
+        tag_types = ["resource_name", "child_resource", "entity_name"]
+    
+    try:
+        ws = import_platform_variable("RW_WORKSPACE")
+        root = import_platform_variable("RW_WORKSPACE_API_URL")
+    except ImportError:
+        return []
+
+    token = os.getenv("RW_USER_TOKEN")
+    if token:
+        sess = requests.Session()
+        sess.headers.update({
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        })
+    else:
+        sess = platform.get_authenticated_session()
+
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    start_url = f"{root}/{workspace_path}/slxs?limit=500"
+    try:
+        all_slxs = _page_through_slxs(start_url, sess)
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        warning_log("Paging SLXs failed", str(e))
+        return []
+
+    terms = {t.lower() for t in entity_refs if isinstance(t, str) and t}
+    tag_types_set = {t.lower() for t in tag_types}
+    
+    if not terms:
+        return []
+
+    hits: List[Dict] = []
+    
+    for slx in all_slxs:
+        spec = slx.get("spec", {})
+        tags = spec.get("tags", [])
+        
+        # Check for matches in specified tag types
+        for tag in tags:
+            tag_name = tag.get("name", "").lower()
+            tag_value = tag.get("value", "").lower()
+            
+            if tag_name in tag_types_set and any(term in tag_value for term in terms):
+                hits.append(slx)
+                break
+    
+    BuiltIn().log(f"Found {len(hits)} SLXs with targeted tag matches for types: {tag_types}", level="INFO")
     return hits
 
 
@@ -226,9 +349,22 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
     except ImportError:
         return None
 
-    sess = platform.get_authenticated_session()
+    token = os.getenv("RW_USER_TOKEN")
+    if token:
+        sess = requests.Session()
+        sess.headers.update({
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        })
+    else:
+        sess = platform.get_authenticated_session()
 
-    rb_url = f"{root}/{ws}/slxs/{slx}/runbook"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    rb_url = f"{root}/{workspace_path}/slxs/{slx}/runbook"
     try:
         rb = sess.get(rb_url, timeout=30)  # Increased timeout from 10 to 30 seconds
         rb.raise_for_status()
@@ -239,11 +375,11 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
 
     patch_body = {
         "runRequests": [{
-            "slxName": f"{ws}--{slx}",
+            "slxName": f"{workspace_path}--{slx}",
             "taskTitles": tasks
         }]
     }
-    rs_url = f"{root}/{ws}/runsessions/{runsess}"
+    rs_url = f"{root}/{workspace_path}/runsessions/{runsess}"
     try:
         rsp = sess.patch(rs_url, json=patch_body, timeout=30)  # Increased timeout from 10 to 30 seconds
         rsp.raise_for_status()
@@ -280,7 +416,12 @@ def import_runsession_details(runsession_id: Optional[str] = None) -> Optional[s
         BuiltIn().log("Missing required vars for import_runsession_details", level="WARN")
         return None
 
-    url = f"{root}/{ws}/runsessions/{runsession_id}"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    url = f"{root}/{workspace_path}/runsessions/{runsession_id}"
     BuiltIn().log(f"Fetching RunSession: {url}", level="INFO")
 
     token = os.getenv("RW_USER_TOKEN")
@@ -313,9 +454,23 @@ def import_memo_variable(key: str) -> Optional[str]:
         BuiltIn().log("Missing vars for import_memo_variable", level="WARN")
         return None
 
-    url = f"{root}/{ws}/runsessions/{runsess}"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    url = f"{root}/{workspace_path}/runsessions/{runsess}"
     BuiltIn().log(f"Fetching memos: {url}", level="INFO")
-    sess = platform.get_authenticated_session()
+    
+    token = os.getenv("RW_USER_TOKEN")
+    if token:
+        sess = requests.Session()
+        sess.headers.update({
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        })
+    else:
+        sess = platform.get_authenticated_session()
 
     try:
         rsp = sess.get(url, timeout=30, verify=platform.REQUEST_VERIFY)
@@ -363,7 +518,12 @@ def import_related_runsession_details(
         BuiltIn().log(f"Missing vars: {e}", level="WARN")
         return None
 
-    endpoint = f"{root}/{ws}/runsessions/{runsession_id}"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    endpoint = f"{root}/{workspace_path}/runsessions/{runsession_id}"
     BuiltIn().log(f"Polling: {endpoint}", level="INFO")
 
     # choose session
@@ -417,24 +577,31 @@ def get_workspace_config() -> list | dict:
       • during local / unit testing – where you may export RW_USER_TOKEN to
         override the auth header.
 
-    Falls back to an empty list on any failure.
+    Falls back to an empty dictionary on any failure.
     """
     # ── 0. Resolve workspace + API root ─────────────────────────────────────
     try:
         ws   = import_platform_variable("RW_WORKSPACE")
         root = import_platform_variable("RW_WORKSPACE_API_URL")
     except ImportError:
-        return []          # running outside expected context
+        return {}          # running outside expected context
 
-    url = f"{root.rstrip('/')}/{ws}/branches/main/workspace.yaml?format=json"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+    
+    url = f"{root.rstrip('/')}/{workspace_path}/branches/main/workspace.yaml?format=json"
 
     # ── 1. Build an authenticated session ──────────────────────────────────
-    sess = platform.get_authenticated_session()      # carries default auth
-
     user_token = os.getenv("RW_USER_TOKEN")
     if user_token:
         # Local test override
+        sess = requests.Session()
         sess.headers.update({"Authorization": f"Bearer {user_token}"})
+    else:
+        # inside a runbook/runtime – session already carries auth headers
+        sess = platform.get_authenticated_session()
 
     sess.headers.setdefault("Content-Type", "application/json")
 
@@ -443,14 +610,14 @@ def get_workspace_config() -> list | dict:
         resp = sess.get(url, timeout=30)  # Increased timeout from 10 to 30 seconds
         resp.raise_for_status()
         # API shape: { "asJson": { …workspace.yaml parsed… } }
-        return resp.json().get("asJson", [])
+        return resp.json().get("asJson", {})
     except (requests.RequestException, json.JSONDecodeError) as e:
         BuiltIn().log(
             f"[get_workspace_config] Failed fetching workspace.yaml for '{ws}': {e}",
             level="WARN",
         )
         platform_logger.exception(e)
-        return []
+        return {}
 
 
 def get_nearby_slxs(workspace_config: dict, slx_name: str) -> list:
@@ -484,7 +651,17 @@ def get_workspace_slxs(
     """
     Get all SLXs in a workspace (paginated) and return combined JSON string.
     """
-    url = f"{rw_api_url}/workspaces/{rw_workspace}/slxs?limit=500"
+    # Handle case where rw_workspace might already include "workspaces/" prefix
+    workspace_path = rw_workspace.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+    
+    # Handle case where rw_api_url might already include "/workspaces" suffix
+    base_url = rw_api_url.rstrip('/')
+    if base_url.endswith('/workspaces'):
+        url = f"{base_url}/{workspace_path}/slxs?limit=500"
+    else:
+        url = f"{base_url}/workspaces/{workspace_path}/slxs?limit=500"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_token.value}",
@@ -585,10 +762,15 @@ def perform_task_search_with_persona(
     except ImportError:
         return {}
 
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
     if "--" not in persona:
-        persona = f"{ws}--{persona}"
+        persona = f"{workspace_path}--{persona}"
 
-    url = f"{root}/{ws}/task-search"
+    url = f"{root}/{workspace_path}/task-search"
     body = {"query": [query], "scope": slx_scope, "persona": persona}
 
     token = os.getenv("RW_USER_TOKEN")
@@ -616,7 +798,12 @@ def perform_task_search(
     except ImportError:
         return {}
 
-    url = f"{root}/{ws}/task-search"
+    # Handle case where ws might already include "workspaces/" prefix
+    workspace_path = ws.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    url = f"{root}/{workspace_path}/task-search"
     body = {"query": [query], "scope": slx_scope}
 
     token = os.getenv("RW_USER_TOKEN")

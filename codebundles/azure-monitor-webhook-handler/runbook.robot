@@ -105,8 +105,8 @@ Start RunSession From Azure Monitor Webhook Details
             ${resource_names}=    Create List    health
         END
 
-        # 3) find SLXs that reference any of those names
-        ${slx_list}=    RW.Workspace.Get Slxs With Entity Reference    ${resource_names}
+        # 3) find SLXs that reference any of those names using targeted search for Azure resources
+        ${slx_list}=    RW.Workspace.Get Slxs With Targeted Entity Reference    ${resource_names}    ["resource_name", "child_resource"]
         Log    Results: ${slx_list}
         IF    len(${slx_list}) == 0
             RW.Core.Add To Report    No SLX matched impacted entities – stopping handler.
@@ -136,17 +136,29 @@ Start RunSession From Azure Monitor Webhook Details
             ${scope_expanded}=    Set Variable    False
             ${expanded_slx_scopes}=    Set Variable    ${final_slx_scopes}
             IF    len(${final_slx_scopes}) == 1
-                ${config}=    RW.Workspace.Get Workspace Config
-
-                ${nearby_slxs}=    RW.Workspace.Get Nearby Slxs
-                ...    workspace_config=${config}
-                ...    slx_name=${final_slx_scopes[0]}
-                @{nearby_slx_list}    Convert To List    ${nearby_slxs}
-                FOR    ${slx}    IN    @{nearby_slx_list}
-                    Append To List    ${expanded_slx_scopes}    ${slx}
+                TRY
+                    ${config}=    RW.Workspace.Get Workspace Config
+                    # Check if config contains SLX data (empty dict means API failure or no SLXs)
+                    IF    len($config) > 0
+                        ${nearby_slxs}=    RW.Workspace.Get Nearby Slxs
+                        ...    workspace_config=${config}
+                        ...    slx_name=${final_slx_scopes[0]}
+                        @{nearby_slx_list}    Convert To List    ${nearby_slxs}
+                        IF    len(${nearby_slx_list}) > 0
+                            FOR    ${slx}    IN    @{nearby_slx_list}
+                                Append To List    ${expanded_slx_scopes}    ${slx}
+                            END
+                            RW.Core.Add Pre To Report    Expanding scope to include the following SLXs: ${expanded_slx_scopes}
+                            ${scope_expanded}=    Set Variable    True
+                        ELSE
+                            RW.Core.Add To Report    No nearby SLXs found for scope expansion
+                        END
+                    ELSE
+                        RW.Core.Add To Report    Could not expand SLX scope - workspace config unavailable
+                    END
+                EXCEPT    AS    ${error}
+                    RW.Core.Add To Report    Could not expand SLX scope due to error: ${error}
                 END
-                Add Pre To Report    Expanding scope to include the following SLXs: ${expanded_slx_scopes}
-                ${scope_expanded}=    Set Variable    True
             END
 
             # If scope was expanded, perform a new search with the expanded scope
@@ -180,13 +192,17 @@ Start RunSession From Azure Monitor Webhook Details
             ELSE
                 IF    '${DRY_RUN_MODE}' == 'false'
                     RW.Core.Add To Report    Dry-run disabled – creating Runsession …
+                    # Add sourceRunSessionID to notes for traceability
+                    ${source_session_id}=    Get From Dictionary    ${CURRENT_SESSION_JSON}    id    default=webhook-azure-monitor-trigger
+                    ${current_notes}=    Set Variable    ${CURRENT_SESSION_JSON["notes"]}
+                    ${enhanced_notes}=    Catenate    SEPARATOR=${\n}    ${current_notes}    sourceRunSessionID: ${source_session_id}
+                    
                     ${runsession}=    RW.RunSession.Create RunSession from Task Search
                     ...    search_response=${persona_search}
                     ...    persona_shortname=${CURRENT_SESSION_JSON["personaShortName"]}
-                    # ...    score_threshold=${run_confidence}
-                    ...     score_threshold=0
+                    ...    score_threshold=${run_confidence}
                     ...    runsession_prefix=Azure-Monitor-Alert-${alert_rule}
-                    ...    notes=${CURRENT_SESSION_JSON["notes"]}
+                    ...    notes=${enhanced_notes}
                     ...    source=${CURRENT_SESSION_JSON["source"]}
                     IF    $runsession != {}
                         ${runsession_url}=     RW.RunSession.Get RunSession Url
@@ -198,7 +214,7 @@ Start RunSession From Azure Monitor Webhook Details
                         ...    severity=2
                         ...    expected=RunSession should be created successfully
                         ...    actual=RunSession was not created properly
-                        ...    title=Could create RunSession from `${CURRENT_SESSION_JSON["source"]}`
+                        ...    title=RunSession creation failed from `${CURRENT_SESSION_JSON["source"]}`
                         ...    reproduce_hint=Try to create new RunSession
                         ...    details=See debug logs or backend response body.
                         ...    next_steps=Inspect runrequest logs or contact RunWhen support.

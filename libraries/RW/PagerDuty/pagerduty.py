@@ -80,7 +80,13 @@ def add_runsession_note_to_incident(
     user_email=get_user_email(userid, secret_token)
 
     app_url = rw_workspace_api_url.replace("papi", "app").split("/api")[0]
-    runsession_url=f"{app_url}/map/{rw_workspace}?selectedRunSessions={rw_runsession}"
+    
+    # Handle case where rw_workspace might already include "workspaces/" prefix
+    workspace_path = rw_workspace.lstrip('/')
+    if workspace_path.startswith('workspaces/'):
+        workspace_path = workspace_path[len('workspaces/'):]
+        
+    runsession_url=f"{app_url}/map/{workspace_path}?selectedRunSessions={rw_runsession}"
 
 
     headers = {
