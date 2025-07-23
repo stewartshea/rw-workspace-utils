@@ -23,6 +23,7 @@ Supported alert types
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Tuple, Union
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -270,6 +271,247 @@ class Azure:                   # Robot will pick up this class
     def parse_alert(self, payload: str | Dict[str, Any]):
         """Return normalised summary dict from raw webhook JSON/text."""
         return parse_azure_monitor_alert(payload)
+
+    def extract_kql_entities(self, payload: str | Dict[str, Any]) -> List[str]:
+        """
+        Extract useful entity names from KQL queries in Azure Monitor webhooks.
+        Returns a list of entity names found in the KQL query patterns.
+        """
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+
+        entity_names = []
+        
+        # Try to extract searchQuery from webhook structure
+        try:
+            alert_context = payload["data"].get("alertContext", {})
+            if alert_context:
+                condition = alert_context.get("condition", {})
+                if condition:
+                    all_of = condition.get("allOf", [])
+                    if len(all_of) > 0:
+                        search_query = all_of[0].get("searchQuery", "")
+                        if search_query:
+                            # Log the query for debugging - use Robot Framework logging
+                            try:
+                                from robot.api import logger
+                                logger.info(f"[KQL EXTRACTION] Processing query:\n{search_query}")
+                            except ImportError:
+                                # Fallback if Robot Framework is not available
+                                print(f"[KQL EXTRACTION] Processing query:\n{search_query}")
+                            # Extract entity names from common KQL patterns
+                            query_entities = self._parse_kql_query_for_entities(search_query)
+                            entity_names.extend(query_entities)
+        except Exception as error:
+            # Log error but don't fail completely
+            pass
+        
+        # Remove duplicates and filter out common non-entity terms
+        return self._filter_and_deduplicate_entities(entity_names)
+
+    def extract_kql_entities_with_query(self, payload: str | Dict[str, Any]) -> tuple:
+        """
+        Extract useful entity names from KQL queries in Azure Monitor webhooks.
+        Returns a tuple of (entity_names, query_text) for better logging.
+        """
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+
+        entity_names = []
+        query_text = ""
+        
+        # Try to extract searchQuery from webhook structure
+        try:
+            alert_context = payload["data"].get("alertContext", {})
+            if alert_context:
+                condition = alert_context.get("condition", {})
+                if condition:
+                    all_of = condition.get("allOf", [])
+                    if len(all_of) > 0:
+                        query_text = all_of[0].get("searchQuery", "")
+                        if query_text:
+                            # Extract entity names from common KQL patterns
+                            query_entities = self._parse_kql_query_for_entities(query_text)
+                            entity_names.extend(query_entities)
+        except Exception as error:
+            # Log error but don't fail completely
+            pass
+        
+        # Remove duplicates and filter out common non-entity terms
+        filtered_entities = self._filter_and_deduplicate_entities(entity_names)
+        return filtered_entities, query_text
+
+    def _parse_kql_query_for_entities(self, query: str) -> List[str]:
+        """Parse KQL query text to extract useful entity names."""
+        entities = []
+        query_lower = query.lower()
+        
+        # Split query into lines for processing
+        lines = query.split('\n')
+        
+        for line in lines:
+            line_trimmed = line.strip()
+            line_lower = line_trimmed.lower()
+            
+            # Pattern 1: where name contains "entity" or where name has "entity"
+            if 'contains "' in line_lower:
+                entity = self._extract_entity_from_contains_pattern(line)
+                if entity:
+                    entities.append(entity)
+            
+            # Pattern 2: where cloud_RoleName has "entity" or similar role patterns
+            if 'rolename' in line_lower and ('"' in line):
+                entity = self._extract_entity_from_role_pattern(line)
+                if entity:
+                    entities.append(entity)
+            
+            # Pattern 3: where serviceName == "entity" or similar service patterns
+            if 'servicename' in line_lower and ('"' in line):
+                entity = self._extract_entity_from_service_pattern(line)
+                if entity:
+                    entities.append(entity)
+            
+            # Pattern 4: where containerName startswith "entity" or similar container patterns
+            if 'containername' in line_lower and ('"' in line):
+                entity = self._extract_entity_from_container_pattern(line)
+                if entity:
+                    entities.append(entity)
+                    
+            # Pattern 5: where podName patterns
+            if 'podname' in line_lower and ('"' in line):
+                entity = self._extract_entity_from_pod_pattern(line)
+                if entity:
+                    entities.append(entity)
+                    
+            # Pattern 6: where deployment or app patterns
+            if ('deployment' in line_lower or 'appname' in line_lower) and ('"' in line):
+                entity = self._extract_entity_from_deployment_pattern(line)
+                if entity:
+                    entities.append(entity)
+        
+        return entities
+
+    def _extract_entity_from_contains_pattern(self, line: str) -> str:
+        """Extract entity name from 'contains "entity"' pattern."""
+        try:
+            # Look for pattern: contains "something"
+            if 'contains "' in line:
+                parts1 = line.split('contains "')
+                if len(parts1) > 1:
+                    parts2 = parts1[1].split('"')
+                    if len(parts2) > 0:
+                        return parts2[0].strip()
+            
+            # Also check for 'has "something"' pattern
+            if 'has "' in line:
+                parts1 = line.split('has "')
+                if len(parts1) > 1:
+                    parts2 = parts1[1].split('"')
+                    if len(parts2) > 0:
+                        return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _extract_entity_from_role_pattern(self, line: str) -> str:
+        """Extract entity name from cloud_RoleName patterns."""
+        try:
+            quote_patterns = ['has "', 'contains "', '== "', 'startswith "']
+            for pattern in quote_patterns:
+                if pattern in line:
+                    parts1 = line.split(pattern)
+                    if len(parts1) > 1:
+                        parts2 = parts1[1].split('"')
+                        if len(parts2) > 0:
+                            return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _extract_entity_from_service_pattern(self, line: str) -> str:
+        """Extract entity name from serviceName patterns."""
+        try:
+            quote_patterns = ['== "', 'has "', 'contains "', 'startswith "']
+            for pattern in quote_patterns:
+                if pattern in line:
+                    parts1 = line.split(pattern)
+                    if len(parts1) > 1:
+                        parts2 = parts1[1].split('"')
+                        if len(parts2) > 0:
+                            return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _extract_entity_from_container_pattern(self, line: str) -> str:
+        """Extract entity name from containerName patterns."""
+        try:
+            quote_patterns = ['startswith "', 'has "', 'contains "', '== "']
+            for pattern in quote_patterns:
+                if pattern in line:
+                    parts1 = line.split(pattern)
+                    if len(parts1) > 1:
+                        parts2 = parts1[1].split('"')
+                        if len(parts2) > 0:
+                            return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _extract_entity_from_pod_pattern(self, line: str) -> str:
+        """Extract entity name from podName patterns."""
+        try:
+            quote_patterns = ['startswith "', 'has "', 'contains "', '== "']
+            for pattern in quote_patterns:
+                if pattern in line:
+                    parts1 = line.split(pattern)
+                    if len(parts1) > 1:
+                        parts2 = parts1[1].split('"')
+                        if len(parts2) > 0:
+                            return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _extract_entity_from_deployment_pattern(self, line: str) -> str:
+        """Extract entity name from deployment/app patterns."""
+        try:
+            quote_patterns = ['== "', 'has "', 'contains "', 'startswith "']
+            for pattern in quote_patterns:
+                if pattern in line:
+                    parts1 = line.split(pattern)
+                    if len(parts1) > 1:
+                        parts2 = parts1[1].split('"')
+                        if len(parts2) > 0:
+                            return parts2[0].strip()
+        except:
+            pass
+        return ""
+
+    def _filter_and_deduplicate_entities(self, entities: List[str]) -> List[str]:
+        """Remove duplicates and filter out common non-entity terms."""
+        filtered_entities = []
+        seen = set()
+        
+        # Common terms to exclude (not useful as entity names)
+        exclude_terms = {'true', 'false', 'null', 'empty', 'test', 'debug', 'log', 'error', 'info', 'warn', 'http', 'https', 'www'}
+        
+        for entity in entities:
+            entity_lower = entity.lower()
+            entity_clean = entity.strip()
+            
+            # Skip if empty, too short, or common term
+            if not entity_clean or len(entity_clean) < 2 or entity_lower in exclude_terms:
+                continue
+                
+            # Skip if already seen
+            if entity_lower in seen:
+                continue
+                
+            filtered_entities.append(entity_clean)
+            seen.add(entity_lower)
+        
+        return filtered_entities
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  CLI helper for ad-hoc testing

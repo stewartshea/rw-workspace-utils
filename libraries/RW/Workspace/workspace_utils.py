@@ -75,7 +75,7 @@ def _page_through_slxs(start_url: str, session: requests.Session) -> List[Dict]:
         retry_delay = 2  # Reset retry_delay for each new URL
         for attempt in range(max_retries):
             try:
-                resp = session.get(url, timeout=30)  # Increased timeout from 10 to 30 seconds
+                resp = session.get(url, timeout=120)  # Increased timeout to 120 seconds to match search timeouts
                 resp.raise_for_status()
                 body = resp.json()
                 break
@@ -366,7 +366,7 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
         
     rb_url = f"{root}/{workspace_path}/slxs/{slx}/runbook"
     try:
-        rb = sess.get(rb_url, timeout=30)  # Increased timeout from 10 to 30 seconds
+        rb = sess.get(rb_url, timeout=120)  # Increased timeout to 120 seconds
         rb.raise_for_status()
         tasks = rb.json().get("status", {}).get("codeBundle", {}).get("tasks", [])
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -381,7 +381,7 @@ def run_tasks_for_slx(slx: str) -> Optional[Dict]:
     }
     rs_url = f"{root}/{workspace_path}/runsessions/{runsess}"
     try:
-        rsp = sess.patch(rs_url, json=patch_body, timeout=30)  # Increased timeout from 10 to 30 seconds
+        rsp = sess.patch(rs_url, json=patch_body, timeout=120)  # Increased timeout to 120 seconds
         rsp.raise_for_status()
         return rsp.json()
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -432,7 +432,7 @@ def import_runsession_details(runsession_id: Optional[str] = None) -> Optional[s
         sess = platform.get_authenticated_session()
 
     try:
-        rsp = sess.get(url, timeout=30, verify=platform.REQUEST_VERIFY)
+        rsp = sess.get(url, timeout=120, verify=platform.REQUEST_VERIFY)
         rsp.raise_for_status()
         return json.dumps(rsp.json())
     except (requests.RequestException, json.JSONDecodeError) as e:
@@ -473,7 +473,7 @@ def import_memo_variable(key: str) -> Optional[str]:
         sess = platform.get_authenticated_session()
 
     try:
-        rsp = sess.get(url, timeout=30, verify=platform.REQUEST_VERIFY)
+        rsp = sess.get(url, timeout=120, verify=platform.REQUEST_VERIFY)
         rsp.raise_for_status()
         for rr in rsp.json().get("runRequests", []):
             if str(rr.get("id")) == runreq:
@@ -607,7 +607,7 @@ def get_workspace_config() -> list | dict:
 
     # ── 2. Fetch & return the file ─────────────────────────────────────────
     try:
-        resp = sess.get(url, timeout=30)  # Increased timeout from 10 to 30 seconds
+        resp = sess.get(url, timeout=120)  # Increased timeout to 120 seconds
         resp.raise_for_status()
         # API shape: { "asJson": { …workspace.yaml parsed… } }
         return resp.json().get("asJson", {})
@@ -670,7 +670,7 @@ def get_workspace_slxs(
     total = None
 
     while url:
-        resp = requests.get(url, headers=headers, timeout=30) # Increased timeout from 10 to 30 seconds
+        resp = requests.get(url, headers=headers, timeout=120) # Increased timeout to 120 seconds
         resp.raise_for_status()
         p = resp.json()
         total = p.get("count", len(all_results))
@@ -691,7 +691,7 @@ def get_workspace_slxs(
 # ===========================================================================
 
 def _post_json(session: requests.Session, url: str, payload: dict) -> dict:
-    resp = session.post(url, json=payload, timeout=30, verify=platform.REQUEST_VERIFY) # Increased timeout from 10 to 30 seconds
+    resp = session.post(url, json=payload, timeout=120, verify=platform.REQUEST_VERIFY) # Increased timeout to 120 seconds
 
     if resp.status_code >= 400:
         curl_cmd = _as_curl(
@@ -699,7 +699,7 @@ def _post_json(session: requests.Session, url: str, payload: dict) -> dict:
             url,
             session,
             json_body=payload,
-            timeout=30,
+            timeout=120,
             verify=platform.REQUEST_VERIFY,
         )
         warning_log(
@@ -753,6 +753,7 @@ def perform_task_search_with_persona(
     query: str,
     persona: str,
     slx_scope: Optional[List[str]] = None,
+    timeout: float = 120.0,
 ) -> Dict:
     """Perform a task search as the given persona."""
     slx_scope = slx_scope or []
@@ -783,12 +784,22 @@ def perform_task_search_with_persona(
     else:
         sess = platform.get_authenticated_session()
 
-    return _post_json(sess, url, body)
+    try:
+        resp = sess.post(url, json=body, timeout=timeout, verify=platform.REQUEST_VERIFY)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.Timeout:
+        BuiltIn().log(f"Task search timed out after {timeout} seconds", level="WARN")
+        return {}
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        BuiltIn().log(f"Task search failed: {e}", level="WARN")
+        return {}
 
 
 def perform_task_search(
     query: str,
     slx_scope: Optional[List[str]] = None,
+    timeout: float = 120.0,
 ) -> Dict:
     """Perform a task search with no persona."""
     slx_scope = slx_scope or []
@@ -816,7 +827,16 @@ def perform_task_search(
     else:
         sess = platform.get_authenticated_session()
 
-    return _post_json(sess, url, body)
+    try:
+        resp = sess.post(url, json=body, timeout=timeout, verify=platform.REQUEST_VERIFY)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.Timeout:
+        BuiltIn().log(f"Task search timed out after {timeout} seconds", level="WARN")
+        return {}
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        BuiltIn().log(f"Task search failed: {e}", level="WARN")
+        return {}
 
 
 def build_task_report_md(
@@ -882,11 +902,12 @@ def perform_improved_task_search(
     slx_scope: Optional[List[str]] = None,
 ) -> Tuple[Dict, str, List[str], str]:
     """
-    Perform an improved three-tier search strategy for webhook handlers:
+    Perform an improved multi-tier search strategy for webhook handlers:
     
-    1. Try search with extracted entity data
-    2. If no high-quality results, search with SLX spec.tag "resource_name" 
-    3. If still no results, search with "child_resource" tag names
+    1. Search with just the specific entity data (highest specificity)
+    2. Search with entity data + resource_type from matching SLXs 
+    3. Search with SLX spec.tag "resource_name" 
+    4. Search with "child_resource" tag names
     
     Args:
         entity_data: List of entity names/identifiers extracted from webhook
@@ -906,10 +927,68 @@ def perform_improved_task_search(
     if "--" not in persona:
         persona = f"{ws}--{persona}"
 
-    # Strategy 1: Search with extracted entity data
+    # Collect SLX aliases for fallback
+    collected_aliases = []
+
+    # Helper function to extract resource_type values from SLXs
+    def extract_resource_types_from_slxs(slxs: List[Dict]) -> List[str]:
+        resource_types = []
+        for slx in slxs:
+            # Collect aliases for fallback while we're processing SLXs
+            alias = slx.get("spec", {}).get("alias", "").strip()
+            if alias and alias not in collected_aliases:
+                collected_aliases.append(alias)
+            
+            # Try to get resource context in order of preference:
+            # 1. resource_type tag (most specific)
+            # 2. kind tag (fallback) 
+            # 3. SLX display alias (final fallback)
+            
+            found_resource_context = None
+            
+            # First, try resource_type tag
+            for tag in slx.get("spec", {}).get("tags", []):
+                if tag.get("name", "").lower() == "resource_type":
+                    resource_type = tag.get("value", "").strip()
+                    if resource_type:
+                        found_resource_context = resource_type
+                        break
+            
+            # If no resource_type found, try kind tag
+            if not found_resource_context:
+                for tag in slx.get("spec", {}).get("tags", []):
+                    if tag.get("name", "").lower() == "kind":
+                        kind_value = tag.get("value", "").strip()
+                        if kind_value:
+                            found_resource_context = kind_value
+                            break
+            
+            # If neither resource_type nor kind found, use SLX alias as final fallback
+            if not found_resource_context:
+                if alias:
+                    # Extract meaningful words from alias, filtering out common non-descriptive terms
+                    alias_words = []
+                    for word in alias.split():
+                        word_clean = word.lower().strip(',-()[]{}')
+                        # Skip common non-descriptive words but keep technical terms
+                        if (len(word_clean) > 2 and 
+                            word_clean not in {'the', 'and', 'for', 'with', 'are', 'should', 'has', 'have'}):
+                            alias_words.append(word_clean)
+                    
+                    # Take first meaningful word from alias as resource context
+                    if alias_words:
+                        found_resource_context = alias_words[0]
+            
+            # Add to our list if we found something and it's not already included
+            if found_resource_context and found_resource_context not in resource_types:
+                resource_types.append(found_resource_context)
+                
+        return resource_types
+
+    # Strategy 1: Search with just the specific entity data (most specific)
     if entity_data:
-        entity_query = " ".join(entity_data) + " health"
-        BuiltIn().log(f"[improved_search] Strategy 1: Searching with entity data: {entity_query}", level="INFO")
+        entity_query = " ".join(entity_data)
+        BuiltIn().log(f"[improved_search] Strategy 1: Searching with specific entity data only: {entity_query}", level="INFO")
         
         search_response = perform_task_search_with_persona(
             query=entity_query,
@@ -925,10 +1004,42 @@ def perform_improved_task_search(
         
         if high_quality_tasks:
             BuiltIn().log(f"[improved_search] Strategy 1 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
-            return search_response, "entity_data", slx_scope or [], entity_query
+            return search_response, "specific_entity_data", slx_scope or [], entity_query
 
-    # Strategy 2: Search with SLX spec.tag "resource_name"
-    BuiltIn().log("[improved_search] Strategy 2: Searching with resource_name tags", level="INFO")
+    # Strategy 2: Search with extracted entity data enhanced with resource_type
+    if entity_data:
+        # First, find SLXs that match our entities to get resource_type context
+        matching_slxs = get_slxs_with_targeted_entity_reference(entity_data, ["resource_name", "child_resource", "entity_name"])
+        resource_types = extract_resource_types_from_slxs(matching_slxs)
+        
+        # Build enhanced query with resource types
+        query_parts = list(entity_data)
+        if resource_types:
+            query_parts.extend(resource_types)
+            BuiltIn().log(f"[improved_search] Enhanced entity query with resource context from matching SLXs: {resource_types}", level="INFO")
+        query_parts.append("health")
+        
+        entity_query = " ".join(query_parts)
+        BuiltIn().log(f"[improved_search] Strategy 2: Searching with enhanced entity data: {entity_query}", level="INFO")
+        
+        search_response = perform_task_search_with_persona(
+            query=entity_query,
+            persona=persona,
+            slx_scope=slx_scope
+        )
+        
+        # Check if we have high-quality results
+        high_quality_tasks = [
+            t for t in search_response.get("tasks", [])
+            if t.get("score", 0) >= confidence_threshold
+        ]
+        
+        if high_quality_tasks:
+            BuiltIn().log(f"[improved_search] Strategy 2 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
+            return search_response, "entity_data_with_resource_type", slx_scope or [], entity_query
+
+    # Strategy 3: Search with SLX spec.tag "resource_name"
+    BuiltIn().log("[improved_search] Strategy 3: Searching with resource_name tags", level="INFO")
     
     # Get SLXs with resource_name tags
     resource_name_tags = [{"name": "resource_name", "value": entity} for entity in entity_data]
@@ -939,37 +1050,16 @@ def perform_improved_task_search(
         # Combine with existing scope if provided
         combined_scope = list(set((slx_scope or []) + resource_slx_scopes))
         
+        # Extract resource types and enhance query for Strategy 3 as well
+        resource_types = extract_resource_types_from_slxs(slx_list)
+        strategy3_query = "health"
+        if resource_types:
+            strategy3_query = " ".join(resource_types) + " health"
+            BuiltIn().log(f"[improved_search] Strategy 3 enhanced with resource context: {resource_types}", level="INFO")
+        
         # Try search with resource_name SLXs
         search_response = perform_task_search_with_persona(
-            query="health",
-            persona=persona,
-            slx_scope=combined_scope
-        )
-        
-        high_quality_tasks = [
-            t for t in search_response.get("tasks", [])
-            if t.get("score", 0) >= confidence_threshold
-        ]
-        
-        if high_quality_tasks:
-            BuiltIn().log(f"[improved_search] Strategy 2 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
-            return search_response, "resource_name_tags", combined_scope, "health"
-
-    # Strategy 3: Search with "child_resource" tag names
-    BuiltIn().log("[improved_search] Strategy 3: Searching with child_resource tags", level="INFO")
-    
-    # Get SLXs with child_resource tags
-    child_resource_tags = [{"name": "child_resource", "value": entity} for entity in entity_data]
-    slx_list = get_slxs_with_tag(child_resource_tags)
-    
-    if slx_list:
-        child_slx_scopes = [slx["shortName"] for slx in slx_list]
-        # Combine with existing scope if provided
-        combined_scope = list(set((slx_scope or []) + child_slx_scopes))
-        
-        # Try search with child_resource SLXs
-        search_response = perform_task_search_with_persona(
-            query="health",
+            query=strategy3_query,
             persona=persona,
             slx_scope=combined_scope
         )
@@ -981,16 +1071,61 @@ def perform_improved_task_search(
         
         if high_quality_tasks:
             BuiltIn().log(f"[improved_search] Strategy 3 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
-            return search_response, "child_resource_tags", combined_scope, "health"
+            return search_response, "resource_name_tags_with_resource_type", combined_scope, strategy3_query
 
-    # If all strategies fail, perform a fallback search
-    BuiltIn().log("[improved_search] All strategies failed to find high-quality results, performing fallback search", level="WARN")
+    # Strategy 4: Search with "child_resource" tag names
+    BuiltIn().log("[improved_search] Strategy 4: Searching with child_resource tags", level="INFO")
+    
+    # Get SLXs with child_resource tags
+    child_resource_tags = [{"name": "child_resource", "value": entity} for entity in entity_data]
+    slx_list = get_slxs_with_tag(child_resource_tags)
+    
+    if slx_list:
+        child_slx_scopes = [slx["shortName"] for slx in slx_list]
+        # Combine with existing scope if provided
+        combined_scope = list(set((slx_scope or []) + child_slx_scopes))
+        
+        # Extract resource types and enhance query for Strategy 4 as well
+        resource_types = extract_resource_types_from_slxs(slx_list)
+        strategy4_query = "health"
+        if resource_types:
+            strategy4_query = " ".join(resource_types) + " health"
+            BuiltIn().log(f"[improved_search] Strategy 4 enhanced with resource context: {resource_types}", level="INFO")
+        
+        # Try search with child_resource SLXs
+        search_response = perform_task_search_with_persona(
+            query=strategy4_query,
+            persona=persona,
+            slx_scope=combined_scope
+        )
+        
+        high_quality_tasks = [
+            t for t in search_response.get("tasks", [])
+            if t.get("score", 0) >= confidence_threshold
+        ]
+        
+        if high_quality_tasks:
+            BuiltIn().log(f"[improved_search] Strategy 4 successful: {len(high_quality_tasks)} high-quality tasks found", level="INFO")
+            return search_response, "child_resource_tags_with_resource_type", combined_scope, strategy4_query
+
+    # If all strategies fail, perform a fallback search using SLX aliases
+    fallback_query = "health"  # Default fallback
+    if collected_aliases:
+        # Use the collected SLX aliases as the fallback query
+        fallback_query = " ".join(collected_aliases)
+        BuiltIn().log(f"[improved_search] All strategies failed to find high-quality results, performing fallback search with SLX aliases: {fallback_query}", level="WARN")
+    elif entity_data:
+        # If no aliases but we have entity data, use entity data
+        fallback_query = " ".join(entity_data)
+        BuiltIn().log(f"[improved_search] All strategies failed to find high-quality results, performing fallback search with entity data: {fallback_query}", level="WARN")
+    else:
+        BuiltIn().log("[improved_search] All strategies failed to find high-quality results, performing fallback search with generic query", level="WARN")
     
     # Always perform fallback search when no high-quality results found
     search_response = perform_task_search_with_persona(
-        query="health",
+        query=fallback_query,
         persona=persona,
         slx_scope=slx_scope
     )
     
-    return search_response, "fallback", slx_scope or [], "health"
+    return search_response, "fallback", slx_scope or [], fallback_query

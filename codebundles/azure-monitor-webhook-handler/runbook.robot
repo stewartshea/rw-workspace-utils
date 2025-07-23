@@ -88,16 +88,40 @@ Start RunSession From Azure Monitor Webhook Details
 
 
     IF    '${parsed_data["monitor_condition"]}' == 'Fired'
-        # 1) full list of impacted targets
+        # 1) Try to extract entities from KQL query first (preferred method)
+        ${kql_result}=    RW.Azure.Extract KQL Entities With Query    ${WEBHOOK_JSON}
+        ${kql_entities}=    Set Variable    ${kql_result[0]}
+        ${kql_query}=       Set Variable    ${kql_result[1]}
+        
+        # Log the KQL query if it exists
+        IF    $kql_query != ''
+            RW.Core.Add Pre To Report    KQL Query Found:\n${kql_query}
+            RW.Core.Add Pre To Report    Entities extracted from KQL: ${kql_entities}
+        ELSE
+            RW.Core.Add Pre To Report    No KQL query found in webhook payload
+        END
+        
+        # 2) Get fallback entities from target resources
         ${impacted_entities}=    Set Variable    ${parsed_data["resources"]}
         Log To Console    Impacted entities: ${impacted_entities}
 
-        # 2) build a list of just the resource names
-        ${resource_names}=    Create List
+        # Build a list of resource names as fallback
+        ${fallback_resource_names}=    Create List
         FOR    ${e}    IN    @{impacted_entities}
-            Append To List    ${resource_names}    ${e["resource_name"]}
+            Append To List    ${fallback_resource_names}    ${e["resource_name"]}
         END
-        Log To Console    Resource names: ${resource_names}
+        Log To Console    Fallback resource names: ${fallback_resource_names}
+
+        # 3) Determine which entity names to use (prioritize KQL entities)
+        ${use_kql_entities}=    Set Variable    False
+        IF    len(${kql_entities}) > 0
+            ${resource_names}=    Set Variable    ${kql_entities}
+            ${use_kql_entities}=    Set Variable    True
+            RW.Core.Add Pre To Report    Using KQL-extracted entities for search: ${resource_names}
+        ELSE
+            ${resource_names}=    Set Variable    ${fallback_resource_names}
+            RW.Core.Add Pre To Report    Using fallback target resource entities for search: ${resource_names}
+        END
 
         # Ensure resource_names is not empty to prevent search issues
         IF    len(${resource_names}) == 0
@@ -105,15 +129,46 @@ Start RunSession From Azure Monitor Webhook Details
             ${resource_names}=    Create List    health
         END
 
-        # 3) find SLXs that reference any of those names using targeted search for Azure resources
+        # 4) find SLXs that reference any of those names using targeted search for Azure resources
         ${slx_list}=    RW.Workspace.Get Slxs With Targeted Entity Reference    ${resource_names}    ["resource_name", "child_resource"]
         Log    Results: ${slx_list}
+        
+        # If KQL entities didn't find SLXs, try fallback with resource names
+        IF    len(${slx_list}) == 0 and ${use_kql_entities}
+            RW.Core.Add Pre To Report    No SLXs found with KQL entities, trying fallback resource names: ${fallback_resource_names}
+            IF    len(${fallback_resource_names}) > 0
+                ${resource_names}=    Set Variable    ${fallback_resource_names}
+                ${slx_list}=    RW.Workspace.Get Slxs With Targeted Entity Reference    ${resource_names}    ["resource_name", "child_resource"]
+                Log    Fallback Results: ${slx_list}
+            END
+        END
+        
         IF    len(${slx_list}) == 0
             RW.Core.Add To Report    No SLX matched impacted entities – stopping handler.
         ELSE
             ${slx_scopes}=    Create List
+            ${slx_aliases}=    Create List
+            
             FOR    ${slx}    IN    @{slx_list}
                 Append To List    ${slx_scopes}    ${slx["shortName"]}
+                
+                # Extract SLX alias
+                ${alias}=    Set Variable    ${slx["spec"]["alias"]}
+                ${modified_alias}=    Set Variable    ${alias}
+                
+                # Find entities from this specific SLX's tags that appear in the alias
+                FOR    ${tag}    IN    @{slx["spec"]["tags"]}
+                    IF    '${tag["name"]}' in ['resource_name', 'child_resource', 'entity_name', 'namespace']
+                        ${entity}=    Set Variable    ${tag["value"]}
+                        # Only wrap if this entity actually appears in this alias
+                        ${contains_entity}=    Run Keyword And Return Status    Should Contain    ${alias}    ${entity}
+                        IF    ${contains_entity}
+                            ${modified_alias}=    Replace String    ${modified_alias}    ${entity}    `${entity}`
+                        END
+                    END
+                END
+                
+                Append To List    ${slx_aliases}    ${modified_alias}
             END
 
             # Get persona / confidence threshold
@@ -121,9 +176,9 @@ Start RunSession From Azure Monitor Webhook Details
             ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
             ${run_confidence}=    Set Variable    ${persona["spec"]["run"]["confidenceThreshold"]}
 
-            # Use improved search strategy
+            # Use improved search strategy with SLX aliases
             ${persona_search}    ${search_strategy}    ${final_slx_scopes}    ${search_query}=    RW.Workspace.Perform Improved Task Search
-            ...    entity_data=${resource_names}
+            ...    entity_data=${slx_aliases}
             ...    persona=${CURRENT_SESSION_JSON["personaShortName"]}
             ...    confidence_threshold=${run_confidence}
             ...    slx_scope=${slx_scopes}
